@@ -2,6 +2,34 @@
 
 A Clojure library designed to ... well, that part is up to you.
 
+## Installation
+
+In addition to a Jepsen environment, you'll need a RadixDLT client.
+
+```
+git clone https://github.com/radixdlt/radixdlt.git
+cd radix-dlt/radixdlt-java/radixdlt-java
+git checkout release/1.0-beta.35
+echo "apply plugin: 'maven'" >> build.gradle
+../../gradlew install
+```
+
+Likewise, radix-engine:
+
+```
+cd ../../radixdlt-engine
+echo "apply plugin: 'maven'" >> build.gradle
+../gradlew install
+```
+
+And radixdlt-java-common
+
+```
+cd ../radixdlt-java-common/
+echo "apply plugin: 'maven'" >> build.gradle
+../gradlew install
+```
+
 ## Usage
 
 FIXME

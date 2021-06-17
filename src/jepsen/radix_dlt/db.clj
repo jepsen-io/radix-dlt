@@ -10,6 +10,7 @@
             [jepsen [control :as c]
                     [core :as jepsen :refer [primary]]
                     [db :as db]
+                    [fs-cache :as cache]
                     [util :as util :refer [parse-long pprint-str]]]
             [jepsen.control [net :as cn]
                             [util :as cu]]
@@ -223,6 +224,14 @@ export RADIXDLT_STAKER_1_PRIVKEY=p7vk1dMv5A0agIbcgB6TWdhKnyunAJTFW9bK6ZiSCHg=
                   out)
             (parse-universe-exports out)))))
 
+(defn universe
+  "Returns a cached universe, or generates a new one."
+  [test]
+  (let [path [:radixdlt :universe]]
+    (cache/locking path
+      (or (cache/load-edn path)
+          (cache/save-edn! (gen-universe test) path)))))
+
 (defn gen-keys!
   "Generates keys for the node, writing them to secret-dir"
   []
@@ -344,15 +353,15 @@ export RADIXDLT_STAKER_1_PRIVKEY=p7vk1dMv5A0agIbcgB6TWdhKnyunAJTFW9bK6ZiSCHg=
 (defn db
   "The Radix DLT database."
   []
-  (let [universe (promise)]
+  (let [uni (promise)]
     (reify db/DB
       (setup! [this test node]
         (when (= node (primary test))
-          (deliver universe (gen-universe test))
-          (info :universe (pprint-str @universe)))
+          (deliver uni (universe test))
+          (info :universe (pprint-str @uni)))
 
         (install! test)
-        (configure! test node @universe)
+        (configure! test node @uni)
         (restart-nginx!)
         (db/start! this test node)
         (await-node node)
@@ -376,7 +385,7 @@ export RADIXDLT_STAKER_1_PRIVKEY=p7vk1dMv5A0agIbcgB6TWdhKnyunAJTFW9bK6ZiSCHg=
             {:chdir   dir
              :logfile log-file
              :pidfile pid-file
-             :env     (env test node @universe)}
+             :env     (env test node @uni)}
             (str bin-dir "/radixdlt")
             ; No args?
             )))

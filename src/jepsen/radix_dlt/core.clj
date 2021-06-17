@@ -1,20 +1,26 @@
 (ns jepsen.radix-dlt.core
   "Top-level namespace: constructs tests and runs them at the CLI."
   (:require [jepsen [cli :as cli]
+                    [generator :as gen]
                     [tests :as tests]
                     [util :as util :refer [parse-long]]]
             [jepsen.os.debian :as debian]
-            [jepsen.radix-dlt.db :as db]))
+            [jepsen.radix-dlt [db :as db]
+                              [workload :as workload]]))
 
 (defn radix-test
   "Constructs a Radix-DLT test from parsed CLI options."
   [opts]
-  (merge tests/noop-test
-         opts
-         {:os               debian/os
-          :db               (db/db)
-          :name             "radix"
-          :pure-generators  true}))
+  (let [workload (workload/workload opts)]
+    (merge tests/noop-test
+           opts
+           {:os               debian/os
+            :db               (db/db)
+            :name             "radix"
+            :pure-generators  true
+            :client           (:client workload)
+            :generator        (->> (:generator workload)
+                                   (gen/time-limit (:time-limit opts)))})))
 
 (def cli-opts
   "Command line option specifications."
