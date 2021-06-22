@@ -14,6 +14,7 @@
                     [util :as util :refer [parse-long pprint-str]]]
             [jepsen.control [net :as cn]
                             [util :as cu]]
+            [jepsen.radix-dlt.client :as rc]
             [jepsen.os.debian :as debian]
             [slingshot.slingshot :refer [try+ throw+]])
   (:import (java.util Base64)))
@@ -165,9 +166,10 @@ export RADIXDLT_STAKER_1_PRIVKEY=p7vk1dMv5A0agIbcgB6TWdhKnyunAJTFW9bK6ZiSCHg=
                          ; This is stored as base64-encoded CBOR
                          (assoc u
                                 :universe-str v
-                                :universe     (-> (Base64/getDecoder)
-                                                  (.decode v)
-                                                  cbor/decode))
+                         ;       :universe     (-> (Base64/getDecoder)
+                         ;                         (.decode v)
+                         ;                         cbor/decode)
+                         )
 
                          (= k "UNIVERSE_TYPE")
                          (assoc u :universe-type (keyword (.toLowerCase v)))
@@ -186,17 +188,14 @@ export RADIXDLT_STAKER_1_PRIVKEY=p7vk1dMv5A0agIbcgB6TWdhKnyunAJTFW9bK6ZiSCHg=
                                      v)
                            ; Dunno!
                            [k v]))))
-               {:env-str    exports
-                :stakers    []
+               {:stakers    []
                 :validators []})))
 
 (defn gen-universe
   "Generates an initial universe. Returns a map of:
 
-    {:env-str         A big ol' blob of env vars as a string
-     :validators      [{:privkey \"...\"} ...]
+    {:validators      [{:privkey \"...\"} ...]
      :stakers         [{:privkey \"...\"} ...]
-     :universe        {...}
      :universe-str    \"base64 encoded cbor string\"
      :universe-type   :DEVELOPMENT
      :universe-token  \"xrd_rb...\"}"
@@ -220,8 +219,7 @@ export RADIXDLT_STAKER_1_PRIVKEY=p7vk1dMv5A0agIbcgB6TWdhKnyunAJTFW9bK6ZiSCHg=
                             :-P (str "validators=" (:validators test))
                             ":radixdlt:clean"
                             ":radixdlt:generateDevUniverse")]
-            (info "dev universe:\n"
-                  out)
+            ;(info "dev universe:\n" out)
             (parse-universe-exports out)))))
 
 (defn universe
@@ -274,7 +272,7 @@ export RADIXDLT_STAKER_1_PRIVKEY=p7vk1dMv5A0agIbcgB6TWdhKnyunAJTFW9bK6ZiSCHg=
            :network.host_ip            (cn/local-ip)
            :db.location                data-dir
            :node_api.port              node-api-port
-           :client_api.enable          false
+           :client_api.enable          true
            :client_api.port            client-api-port
            :log.level                  "debug"
            :universe                   (:universe-str universe)}
@@ -342,13 +340,17 @@ export RADIXDLT_STAKER_1_PRIVKEY=p7vk1dMv5A0agIbcgB6TWdhKnyunAJTFW9bK6ZiSCHg=
 (defn await-node
   "Blocks until we can fetch the /node JSON data"
   [node]
-  (info :node (util/await-fn
-                (fn []
-                  (:body (http/get (str "https://" node "/node")
-                                   {:basic-auth  ["admin" password]
-                                    :as          :json
-                                    :insecure?   true})))
-                {:log-message (str "Waiting for https://" node "/node")})))
+  (let [res (util/await-fn
+               (fn []
+                 (:body (http/get (str "https://" node "/node")
+                                  {:basic-auth  ["admin" password]
+                                   :as          :json
+                                   :insecure?   true})))
+               {:log-message (str "Waiting for https://" node "/node")})]
+    (dt/assert+ (:address res)
+                {:type ::malformed-node-data?
+                 :res  res
+                 :node node})))
 
 (defn db
   "The Radix DLT database."
@@ -358,14 +360,18 @@ export RADIXDLT_STAKER_1_PRIVKEY=p7vk1dMv5A0agIbcgB6TWdhKnyunAJTFW9bK6ZiSCHg=
       (setup! [this test node]
         (when (= node (primary test))
           (deliver uni (universe test))
-          (info :universe (pprint-str @uni)))
+          ;(info :universe (pprint-str @uni))
+          )
 
         (install! test)
         (configure! test node @uni)
         (restart-nginx!)
         (db/start! this test node)
         (await-node node)
-        (Thread/sleep 20000))
+        ; Hack: even though the /node is ready, the client api might take
+        ; longer, and we'll get weird parse errors when HTML shows up instead
+        ; of JSON
+        (rc/await-initial-convergence node))
 
       (teardown! [this test node]
         (db/kill! this test node)

@@ -1,6 +1,7 @@
 (ns jepsen.radix-dlt.core
   "Top-level namespace: constructs tests and runs them at the CLI."
-  (:require [jepsen [cli :as cli]
+  (:require [jepsen [checker :as checker]
+                    [cli :as cli]
                     [generator :as gen]
                     [tests :as tests]
                     [util :as util :refer [parse-long]]]
@@ -19,8 +20,18 @@
             :name             "radix"
             :pure-generators  true
             :client           (:client workload)
-            :generator        (->> (:generator workload)
-                                   (gen/time-limit (:time-limit opts)))})))
+            :checker          (checker/compose
+                                {:workload (:checker workload)
+                                 :perf     (checker/perf)
+                                 :stats    (checker/stats)})
+            :generator        (gen/phases
+                                (->> (:generator workload)
+                                     (gen/nemesis nil)
+                                     (gen/time-limit (:time-limit opts)))
+                                (gen/log "Waiting for recovery...")
+                                (gen/sleep 5)
+                                (->> (:final-generator workload)
+                                     (gen/clients)))})))
 
 (def cli-opts
   "Command line option specifications."
@@ -33,6 +44,16 @@
    [nil "--validators COUNT" "Number of validators."
     :default  5
     :parse-fn parse-long]
+
+   [nil "--txn-rate HZ" "Target number of transactions per second"
+    :default 1
+    :parse-fn read-string
+    :validate [#(and (number? %) (not (neg? %))) "Must be non-negative"]]
+
+   [nil "--txn-log-rate HZ" "Target number of reads of the txn log per second"
+    :default  1
+    :parse-fn read-string
+    :validate [#(and (number? %) (not (neg? %))) "Must be non-negative"]]
 
    [nil "--version VERSION" "RadixDLT version (from https://github.com/radixdlt/radixdlt/releases)"
     :default "1.0-beta.35.1"]
