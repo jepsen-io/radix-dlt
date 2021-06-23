@@ -400,12 +400,16 @@
         (finalize-txn client txn key-pair)
         (submit-txn! client txn)))
 
+(def history-chunk-size
+  "What's the `size` parameter we pass to each transaction history request?"
+  128)
+
 (defn txn-history
   "Takes an account address, a size (perhaps a number of transactions?).
   Returns a lazy seq of transactions from that account's history, in reverse
   chronological order."
   ([^RadixApi client address]
-   (txn-history client address 4))
+   (txn-history client address history-chunk-size))
   ([^RadixApi client address size]
    ; A bit weird: here the absence of a cursor means we're *starting* the
    ; sequence; later the absence of a cursor means the sequence is *ending*.
