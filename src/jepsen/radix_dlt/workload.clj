@@ -6,7 +6,8 @@
                     [client :as client]
                     [generator :as gen]
                     [util :as util]]
-            [jepsen.radix-dlt.client :as rc]
+            [jepsen.radix-dlt [checker :as rchecker]
+                              [client :as rc]]
             [slingshot.slingshot :refer [try+ throw+]]))
 
 (def default-account-ids
@@ -115,10 +116,13 @@
                             :failed     :fail)))
 
         :txn-log
-        (let [log     (->> (rc/txn-history conn (id->address @accounts
-                                                             (:account value)))
-                           reverse
-                           (mapv :message))
+        (let [log (->> (rc/txn-history conn (id->address @accounts
+                                                         (:account value)))
+                       reverse
+                       (mapv (fn [action]
+                               (select-keys action [:fee
+                                                    :message
+                                                    :actions]))))
               value'  (assoc value :txns log)]
           (assoc op :type :ok :value value')))))
 
@@ -198,7 +202,7 @@
   [opts]
   (let [accounts (atom (initial-accounts))]
     {:client          (client accounts)
-     :checker         (checker/unbridled-optimism)
+     :checker         (rchecker/checker)
      :generator       (gen (assoc opts :accounts accounts))
      :final-generator (delay
                         (->> @accounts
