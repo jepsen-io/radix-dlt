@@ -20,16 +20,20 @@
   of accounts, each a map of {:id, :key-pair, :address}, and indices :by-id,
   :by-address"
   []
-  {:accounts    []
-   :by-id       {}
-   :by-address  {}})
+  {:accounts       []
+   :by-id          {}
+   :by-address     {}
+   :by-address-str {}})
 
 (defn conj-account
   "Adds an account to an accounts structure."
   [accounts account]
-  {:accounts    (conj  (:accounts accounts)    account)
+  {:accounts    (conj  (:accounts accounts)   account)
    :by-id       (assoc (:by-id accounts)      (:id account)       account)
-   :by-address  (assoc (:by-address accounts) (:address account)  account)})
+   :by-address  (assoc (:by-address accounts) (:address account)  account)
+   :by-address-str (assoc (:by-address-str accounts)
+                          (str (:address account))
+                          account)})
 
 (defn id->address
   "Converts an ID to an address, given an accounts structure."
@@ -37,6 +41,11 @@
   (-> accounts :by-id (get id) :address
       (assert+ {:type :no-such-id
                 :id   id})))
+
+(defn address-str->id
+  "Converts an address string to an ID, given an accounts structure."
+  [accounts address]
+  (-> accounts :by-address-str (get address) :id))
 
 (defn id->key-pair
   "Converts an ID to a key-pair, given an accounts structure."
@@ -116,15 +125,35 @@
                             :failed     :fail)))
 
         :txn-log
-        (let [log (->> (rc/txn-history conn (id->address @accounts
+        (let [; A little helper: we want to translate addresses into numeric IDs
+              ; when we know them, but leave them as big hex strings otherwise
+              address->id (fn [address]
+                            (or (address-str->id @accounts address)
+                                address))
+              log (->> (rc/txn-history conn (id->address @accounts
                                                          (:account value)))
                        reverse
-                       (mapv (fn [action]
-                               (select-keys action [:fee
-                                                    :message
-                                                    :actions]))))
+                       (mapv (fn [{:keys [fee message actions]}]
+                               {:fee      fee
+                                :message  message
+                                ; Rewrite accounts to IDs
+                                :actions (mapv (fn [action]
+                                                 (-> action
+                                                     (update :from address->id)
+                                                     (update :to address->id)))
+                                               actions)})))
               value'  (assoc value :txns log)]
-          (assoc op :type :ok :value value')))))
+          (assoc op :type :ok :value value'))
+
+        :balance
+        (let [b (->> (rc/token-balances conn (id->address @accounts
+                                                          (:account value)))
+                     :balances
+                     (filter (comp #{@token-rri} :rri))
+                     first
+                     :amount)
+              value' (assoc value :balance b)]
+          (assoc op :type :ok, :value value')))))
 
   (teardown! [this test])
 
@@ -181,21 +210,37 @@
 (defn txn-logs
   "Generates reads of the transaction log on individual accounts, e.g.:
 
-    {:account 1}
+    {:type :invoke, :f :txn-log, :value {:account 1}}
 
   Options:
 
-    :txn-log-rate   The approximate rate, in hz, of txns."
+    :txn-log-rate   The approximate rate, in hz, of txn log requests"
   [opts]
   (->> (fn gen []
          {:f     :txn-log
           :value {:account (rand-id @(:accounts opts))}})
        (gen/stagger (/ (:txn-log-rate opts)))))
 
+(defn balances
+  "Generates reads of the current balance on individual accounts, e.g.:
+
+    {:type :invoke, :f :balance, {:account 1}}
+
+  Options:
+
+    :balance-rate   The approximate rate, in hz, of balance requests"
+  [opts]
+  (->> (fn gen []
+         {:f      :balance
+          :value  {:account (rand-id @(:accounts opts))}})
+       (gen/stagger (/ (:balance-rate opts)))))
+
 (defn gen
   "Generates operations given CLI opts"
   [opts]
-  (gen/any (txns opts) (txn-logs opts)))
+  (gen/any (txns opts)
+           (txn-logs opts)
+           (balances opts)))
 
 (defn workload
   "Constructs a package of a client and generator."

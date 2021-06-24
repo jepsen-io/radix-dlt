@@ -178,6 +178,14 @@
   nil
   (->clj [x] nil))
 
+(defprotocol ToAccountAddress
+  "Converts strings and AccountAddresses back into AccountAddresses."
+  (->account-address [x]))
+
+(extend-protocol ToAccountAddress
+  AccountAddress
+  (->account-address [x] x))
+
 (defprotocol ToAID
   "Converts strings and AIDs back into AIDs. We do this because it's nice, for
   our purposes, to have cleanly serializable atom IDs that we can write to logs

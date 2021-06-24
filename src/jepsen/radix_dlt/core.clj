@@ -33,27 +33,35 @@
                                 (->> (:final-generator workload)
                                      (gen/clients)))})))
 
+(def validate-non-neg
+  [#(and (number? %) (not (neg? %))) "Must be non-negative"])
+
 (def cli-opts
   "Command line option specifications."
-  [[nil "--node-runner-version VERSION-STRING" "Which version of https://github.com/radixdlt/node-runner/releases should we use to install Radix?"
+  [[nil "--balance-rate HZ" "Target number of balance reads per second."
+    :default 1
+    :parse-fn read-string
+    :validate validate-non-neg]
+
+   [nil "--node-runner-version VERSION-STRING" "Which version of https://github.com/radixdlt/node-runner/releases should we use to install Radix?"
     :default "1.0-beta.35.1"]
 
    [nil "--radix-git-version COMMIT" "What commit from radix-dlt should we check out?"
     :default "09e06232ac26e51faf567bc0af7324341508ddfc"]
 
-   [nil "--validators COUNT" "Number of validators."
-    :default  5
-    :parse-fn parse-long]
-
    [nil "--txn-rate HZ" "Target number of transactions per second"
     :default 1
     :parse-fn read-string
-    :validate [#(and (number? %) (not (neg? %))) "Must be non-negative"]]
+    :validate validate-non-neg]
 
    [nil "--txn-log-rate HZ" "Target number of reads of the txn log per second"
     :default  1
     :parse-fn read-string
-    :validate [#(and (number? %) (not (neg? %))) "Must be non-negative"]]
+    :validate validate-non-neg]
+
+   [nil "--validators COUNT" "Number of validators."
+    :default  5
+    :parse-fn parse-long]
 
    [nil "--version VERSION" "RadixDLT version (from https://github.com/radixdlt/radixdlt/releases)"
     :default "1.0-beta.35.1"]
