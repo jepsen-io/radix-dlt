@@ -10,12 +10,25 @@
             [jepsen.checker.timeline :as timeline]
             [jepsen.tests.cycle.append :as append]))
 
+(def init-balance
+  "How much XRD do accounts start with?"
+  1000000000000000000000000000000000000000000000)
+
 (defn mop-accounts
   "Takes a micro-op in a Radix transaction (e.g. [:transfer 1 2 50]) and
   returns the collection of involved accounts (e.g. [1 2])"
   [op]
   (case (first op)
     :transfer (subvec op 1 3)))
+
+(defn txn-op-accounts
+  "A unique list of all accounts involved in a Radix :txn op"
+  [op]
+  (->> (:value op)
+       :ops
+       (mapcat mop-accounts)
+       (cons (:from (:value op)))
+       distinct))
 
 (defn txn-id
   "Takes a txn from a txn-log operation and returns the ID encoded in its
@@ -54,7 +67,6 @@
   transaction (i.e. from a txn-log :txns field) to it, returning a new balance
   number."
   [account balance txn]
-  (info nil)
   ;(info :account account :balance balance :txn txn)
   ; If we're the originator of this transaction, then we paid the fee
   (let [balance (if (-> txn :actions first :from (= account))
@@ -70,11 +82,6 @@
                   (= to account)   (+ amount))))  ; Credit
             balance
             (:actions txn))))
-
-(def init-balance
-  "How much XRD do accounts start with?"
-  ;999999999999999999999999999499999999999999995
-  1000000000000000000000000000000000000000000000)
 
 (defn account-balance->txn-ids
   "Takes an account and a longest-txn-logs series of transactions on that
@@ -136,6 +143,31 @@
           {}
           (longest-txn-logs history)))
 
+(defn unseen-txn-ids
+  "Takes a Radix history and computes a map of accounts to collections of
+  unseen transaction IDs---those which did not appear in the longest txn
+  history."
+  [history]
+  (let [seen (->> (longest-txn-logs history)
+                  (map-vals (comp set (partial keep txn-id))))]
+    ; Find all the txns that *could* have taken effect
+    (->> history
+         (filter (comp #{:txn} :f))
+         (filter (comp #{:ok :info} :type))
+         ; Take these transactions and build a map of accounts to possible txn
+         ; ids, only if they're not in the longest sets.
+         (reduce (fn [m op]
+                   (let [id (:id (:value op))]
+                     (reduce (fn [m acct]
+                               (let [seen (get seen acct (sorted-set))]
+                                 (if (seen id)
+                                   m
+                                   ; Aha, an unseen txn!
+                                   (assoc m acct (conj (get m acct []) id)))))
+                             m
+                             (txn-op-accounts op))))
+                 {}))))
+
 (defn list-append-history
   "Takes a Radix-DLT history and rewrites it to look like an Elle list-append
   history.
@@ -158,12 +190,9 @@
             (case f
               :txn
               (let [id  (:id value)
-                    ; Compute a set of involved accounts
-                    txn (->> (:ops value)
-                             (mapcat mop-accounts)
-                             (cons (:from value))
-                             distinct
-                             ; Generate synthetic transaction
+                    ; Generate synthetic transaction writing to all involved
+                    ; accounts
+                    txn (->> (txn-op-accounts op)
                              (mapv (fn [acct] [:append acct id])))]
                 (assoc op :value txn))
 
@@ -186,16 +215,19 @@
                     ; from
                     nil
                     (assoc op
-                           :type :info
-                           :error :unknown-balance
-                           :value [[:r account nil]])
+                           :type    :info
+                           :error   :unknown-balance
+                           :balance (:balance value)
+                           :value   [[:r account nil]])
 
                     :multiple
                     ; We info this read, since it can't be interpreted
                     ; distinctly
-                    (assoc op :type :info
-                           :error :ambiguous-balance
-                           :value [[:r account nil]])
+                    (assoc op
+                           :type    :info
+                           :error   :ambiguous-balance
+                           :balance (:balance value)
+                           :value   [[:r account nil]])
 
                     ; Great, we know which txns must have produced this
                     (assoc op :type :ok, :value [[:r account txn-ids]])))
@@ -314,6 +346,16 @@
      ; And our custom explainer, which knows about both types of edges
      :explainer (RealtimeNodeExplainer. realtime-graph node-graph pairs)}))
 
+(defn sample
+  "Like take, but returns n items max, taken from the start *and* end, with
+  middle items elided by '..."
+  [n coll]
+  (if (<= (count coll) n)
+    coll
+    (concat (take (Math/ceil (/ n 2)) coll)
+            ['...]
+            (take-last (Math/floor (/ n 2)) coll))))
+
 (defn list-append-checker
   "We'd like to ensure that our transactions are serializable, (and ideally,
   that writes are strict-serializable). Elle has extension points for writing
@@ -344,8 +386,8 @@
   (let [elle (append/checker {:consistency-models [:strict-serializable]})]
     (reify checker/Checker
       (check [this test history opts]
-        (let [history (list-append-history history)]
-          (info :history (pprint-str history))
+        (let [la-history (list-append-history history)]
+          ;(info :history (pprint-str la-history))
           ; Oh this is such a gross hack. There's all this *really* nice,
           ; sophisticated machinery for detecting various anomalies in
           ; elle.txn, but it all assumes the builtin realtime/process graphs.
@@ -354,10 +396,10 @@
           ; computes its realtime graph.
           (let [res (with-redefs [elle.core/realtime-graph
                                   (partial realtime+node-graph test)]
-                      (checker/check elle test history opts))
+                      (checker/check elle test la-history opts))
                 ; As an extra piece of debugging info, we're going to record
                 ; how many reads went recognized/unrecognized.
-                balances           (filter (comp #{:balance} :f) history)
+                balances           (filter (comp #{:balance} :f) la-history)
                 ok-balances        (filter (comp #{:ok} :type) balances)
                 info-balances      (filter (comp #{:info} :type) balances)
                 unknown-balances   (filter (comp #{:unknown-balance} :error)
@@ -368,8 +410,9 @@
                    :ok-balance-count        (count ok-balances)
                    :unknown-balance-count   (count unknown-balances)
                    :ambiguous-balance-count (count ambiguous-balances)
-                   :unknown-balances        (take 5 unknown-balances)
-                   :ambiguous-balances      (take 5 ambiguous-balances))))))))
+                   :unknown-balances        (sample 6 unknown-balances)
+                   :ambiguous-balances      (sample 6 ambiguous-balances)
+                   :unseen-txn-ids          (unseen-txn-ids history))))))))
 
 (defn checker
   "Unified checker."

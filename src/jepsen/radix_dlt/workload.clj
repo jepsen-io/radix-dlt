@@ -80,7 +80,11 @@
   [op & body]
   `(try+ ~@body
          (catch [:type :timeout] e#
-           (assoc ~op :type :info, :error :timeout))))
+           (assoc ~op :type :info, :error :timeout))
+         (catch [:type :radix-dlt/failure, :code 1500] e#
+           (assoc ~op :type :info, :error [:substate-not-found
+                                           (:message e#)]))))
+
 
 (defrecord Client [conn node accounts token-rri]
   client/Client
