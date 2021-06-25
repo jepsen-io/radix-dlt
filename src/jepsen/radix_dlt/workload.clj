@@ -253,9 +253,10 @@
     {:client          (client accounts)
      :checker         (rchecker/checker)
      :generator       (gen (assoc opts :accounts accounts))
-     :final-generator (delay
-                        (->> @accounts
-                             :accounts
-                             (map :id)
-                             (map (fn [acct]
-                                    {:f :txn-log, :value {:account acct}}))))}))
+     :final-generator (gen/each-thread
+                        (delay
+                          (->> @accounts
+                               :accounts
+                               (map :id)
+                               (map (fn [acct]
+                                      {:f :txn-log, :value {:account acct}})))))}))

@@ -29,7 +29,7 @@
                                      (gen/nemesis nil)
                                      (gen/time-limit (:time-limit opts)))
                                 (gen/log "Waiting for recovery...")
-                                (gen/sleep 5)
+                                (gen/sleep 60)
                                 (->> (:final-generator workload)
                                      (gen/clients)))})))
 

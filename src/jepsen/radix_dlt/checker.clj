@@ -8,27 +8,16 @@
                                            parse-long
                                            pprint-str]]]
             [jepsen.checker.timeline :as timeline]
+            [jepsen.radix-dlt [balance-vis :as balance-vis]]
+            [jepsen.radix-dlt.checker.util :refer [mop-accounts
+                                                   txn-op-accounts
+                                                   op-accounts
+                                                   all-accounts]]
             [jepsen.tests.cycle.append :as append]))
 
 (def init-balance
   "How much XRD do accounts start with?"
   1000000000000000000000000000000000000000000000)
-
-(defn mop-accounts
-  "Takes a micro-op in a Radix transaction (e.g. [:transfer 1 2 50]) and
-  returns the collection of involved accounts (e.g. [1 2])"
-  [op]
-  (case (first op)
-    :transfer (subvec op 1 3)))
-
-(defn txn-op-accounts
-  "A unique list of all accounts involved in a Radix :txn op"
-  [op]
-  (->> (:value op)
-       :ops
-       (mapcat mop-accounts)
-       (cons (:from (:value op)))
-       distinct))
 
 (defn txn-id
   "Takes a txn from a txn-log operation and returns the ID encoded in its
@@ -406,6 +395,11 @@
                                            info-balances)
                 ambiguous-balances (filter (comp #{:ambiguous-balance} :error)
                                            info-balances)]
+
+            ; Render balance visualizations
+            (doseq [account (all-accounts history)]
+              (balance-vis/render-account! test history account))
+
             (assoc res
                    :ok-balance-count        (count ok-balances)
                    :unknown-balance-count   (count unknown-balances)
