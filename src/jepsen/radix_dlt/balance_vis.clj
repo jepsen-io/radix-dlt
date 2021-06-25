@@ -18,6 +18,7 @@
   because the values involved here are sparse and distinguished by vastly
   different scales."
   (:require [clojure.string :as str]
+            [clojure.tools.logging :refer [info warn]]
             [clj-time.coerce :as t-coerce]
             [hiccup.core :as h]
             [knossos.history :as history]
@@ -25,22 +26,27 @@
                     [util :as util :refer [name+ pprint-str]]]
             [jepsen.checker.timeline :as timeline]
             [jepsen.radix-dlt.checker.util :refer [known-balances
+                                                   txn-id
+                                                   txn-logs
                                                    op-accounts]]))
 
 (def stylesheet nil)
 
 (def time-height
   "How high, in em, is a timeslice?"
-  2)
+  1)
 
 (def balance-width
   "How wide, in em, is a balance track?"
-  4)
+  1)
 
 (def stylesheet
-  (str ".ops { position: absolute; }\n"
-       ".op  { position: absolute; padding: 2px; border-radius: 2px; box-shadow: 0 1px 3px rgba(0,0,0,0.12), 0 1px 2px rgba(0,0,0,0.24); overflow: hidden; }\n"
-       ".op.balance { background: #A5F7B7 }"))
+  (str ".ops { position: absolute; width: 100%; }\n"
+       ".op  { position: absolute; padding: 2px; border-radius: 2px; box-shadow: 0 1px 3px rgba(0,0,0,0.12), 0 1px 2px rgba(0,0,0,0.24); overflow: hidden; z-index: 2 }\n"
+       ".op.balance { background: #A5F7B7 }\n"
+       ".op.txn { background: #A5DEF7 }\n"
+       ".op.txn.unseen { background: #D0D0D0; z-index: 1 }\n"
+       ))
 
 (defn account-history
   "Restricts a history to a single account, and assigns each operation a
@@ -102,11 +108,55 @@
                                       (timeline/render-op complete))}
                     "b " balance]))))))
 
+(defn render-txns
+  "Takes a map with:
+
+    :history          A single-account history
+    :txn-log          An augmented txn log for this account
+    :balance-index    A map of balances to column indices
+
+  And returns a sequence of boxes, one for each txn operation."
+  [{:keys [balance-index history txn-log]}]
+  (->> history
+       (filter (comp #{:txn} :f))
+       history/pairs+
+       (keep (fn [[invoke complete]]
+               (let [id (:id (:value invoke))]
+                 ; Do we have an entry in the txn log?
+                 (if-let [log-txn (get-in txn-log [:by-id id])]
+                   (let [balance' (:balance' log-txn)
+                         left (-> balance-index
+                                  (get balance')
+                                  (* balance-width)
+                                  (str "em"))]
+                     [:div {:class "op txn"
+                            :style (timeline/style
+                                     (assoc (partial-coords invoke complete)
+                                            :left left))
+                            :title (str "Txn: " (:balance log-txn) " -> "
+                                        balance' "\n\n"
+                                        (timeline/render-op complete))}
+                      (str "t" id)])
+                   ; We don't have an entry in the txn log for this. It might
+                   ; have been serialized after our final read, or it might
+                   ; have failed, or it might be ~illegal~; who knows. We'll
+                   ; render it as a full-width bar.
+                   [:div {:class "op txn unseen"
+                          :style (timeline/style
+                                   (-> (partial-coords invoke complete)
+                                       (assoc :left 0
+                                              :width "100%"
+                                              :right 0)))
+                          :title (str "Unseen txn:\n"
+                                      (timeline/render-op complete))}]))))))
+
 (defn render-account!
   "Writes out an account's HTML file."
   [test history account]
   (let [history  (account-history account history)
+        txn-log  (-> history txn-logs (get account))
         analysis {:history       history
+                  :txn-log       txn-log
                   :balance-index (balance-index history)}]
     (->> (h/html [:html
                   [:head
@@ -114,5 +164,6 @@
                  [:body
                   [:h1 (str "Account " account)]
                   [:div {:class "ops"}
-                   (render-balances analysis)]])
+                   (render-balances analysis)
+                   (render-txns     analysis)]])
          (spit (store/path! test "balances" (str account ".html"))))))
