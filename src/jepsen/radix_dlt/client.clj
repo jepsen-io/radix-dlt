@@ -426,7 +426,9 @@
      (let [chunk (-> client
                      (.transactionHistory address size (Optional/empty))
                      ->clj)]
-       ;(info :chunk (pprint-str chunk))
+       (info :initial-chunk (->> chunk :txns count)
+             :ids      (->> chunk :txns (map :id))
+             :messages (->> chunk :txns (map :message)))
        (concat (:txns chunk)
                (txn-history client address size (:cursor chunk))))))
   ([^RadixApi client ^AccountAddress address size cursor]
@@ -439,7 +441,10 @@
                        (.transactionHistory
                          address size (Optional/of cursor))
                        ->clj)]
-         ; (info :chunk (pprint-str chunk))
+         (info :later-chunk (->> chunk :txns count)
+               :cursor (.value cursor)
+               :ids      (->> chunk :txns (map :id))
+               :messages (->> chunk :txns (map :message)))
          (concat (:txns chunk)
                  (txn-history client address size (:cursor chunk))))))))
 

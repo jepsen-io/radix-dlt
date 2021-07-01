@@ -67,6 +67,11 @@
               (let [id  (:id value)
                     ; Generate synthetic transaction writing to all involved
                     ; accounts
+                    _ (when (= id 9)
+                        (info "Generating txn for" id ":" op "\n"
+                              (->> (txn-op-accounts op)
+                                   (mapv (fn [acct] [:append acct id])))))
+
                     txn (->> (txn-op-accounts op)
                              (mapv (fn [acct] [:append acct id])))]
                 (assoc op :value txn))
@@ -258,10 +263,13 @@
   to single nodes), and in addition, build a *partial* realtime graph
   restricted to only write transactions."
   []
-  (let [elle (append/checker {:consistency-models [:strict-serializable]})]
+  (let [elle (append/checker {;:max-plot-bytes     1000000
+                              :cycle-search-timeout 100000
+                              :consistency-models [:strict-serializable]})]
     (reify checker/Checker
       (check [this test history opts]
-        (let [la-history (list-append-history history)]
+        (let [history    (subvec history 0 500)
+              la-history (list-append-history history)]
           ;(info :history (pprint-str la-history))
           ; Oh this is such a gross hack. There's all this *really* nice,
           ; sophisticated machinery for detecting various anomalies in
