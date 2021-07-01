@@ -8,7 +8,8 @@
                                            parse-long
                                            pprint-str]]]
             [jepsen.checker.timeline :as timeline]
-            [jepsen.radix-dlt [balance-vis :as balance-vis]]
+            [jepsen.radix-dlt [balance-vis :as balance-vis]
+                              [util :as u]]
             [jepsen.radix-dlt.checker.util :refer [account->balance->txn-ids
                                                    all-accounts
                                                    longest-txn-logs
@@ -67,11 +68,10 @@
               (let [id  (:id value)
                     ; Generate synthetic transaction writing to all involved
                     ; accounts
-                    _ (when (= id 9)
-                        (info "Generating txn for" id ":" op "\n"
-                              (->> (txn-op-accounts op)
-                                   (mapv (fn [acct] [:append acct id])))))
-
+                    ;_ (when (= id 9)
+                    ;    (info "Generating txn for" id ":" op "\n"
+                    ;          (->> (txn-op-accounts op)
+                    ;               (mapv (fn [acct] [:append acct id])))))
                     txn (->> (txn-op-accounts op)
                              (mapv (fn [acct] [:append acct id])))]
                 (assoc op :value txn))

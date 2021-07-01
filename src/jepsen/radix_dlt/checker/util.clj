@@ -3,11 +3,15 @@
   (:require [clojure [set :as set]]
             [clojure.tools.logging :refer [info warn]]
             [jepsen [util :refer [map-vals pprint-str parse-long]]]
+            [jepsen.radix-dlt [util :as u]]
             [knossos.op :as op]))
 
-(def init-balance
+(defn init-balance
   "How much XRD do accounts start with?"
-  1000000000000000000000000000000000000000000000)
+  [account]
+  (if (u/default-account-id? account)
+    1000000000000000000000000000000000000000000000
+    0))
 
 (defn txn-id
   "Takes a txn from a txn-log operation and returns the ID encoded in its
@@ -125,7 +129,7 @@
         txns' (reduce (fn [journal txn]
                         (let [balance (if-let [prev (peek journal)]
                                         (:balance' prev)
-                                        init-balance)
+                                        (init-balance account))
                               balance' (apply-txn account balance txn)
                               txn' (assoc txn
                                           :balance  balance
@@ -166,7 +170,7 @@
     ; Now, step through transactions, updating our account balance and building
     ; a map of balances to subvecs of txn-ids
     (loop [m       {}
-           balance init-balance
+           balance (init-balance account)
            ; Index into our transactions list
            txn-i     0
            ; Index into the transaction ids list, since not all txns *have* IDs

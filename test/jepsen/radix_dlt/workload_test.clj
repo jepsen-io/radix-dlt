@@ -1,11 +1,13 @@
 (ns jepsen.radix-dlt.workload-test
   (:require [clojure.tools.logging :refer [info warn]]
             [clojure [pprint :refer [pprint]]
+                     [set :as set]
                      [test :refer :all]]
             [jepsen [generator :as gen]
                     [util :as util]]
             [jepsen.generator.test :as gt]
-            [jepsen.radix-dlt.workload :as w]))
+            [jepsen.radix-dlt [util :as u]
+                              [workload :as w]]))
 
 (defn keys-in
   "Returns all keys in an op."
@@ -26,16 +28,29 @@
   (let [n                  10000
         max-writes-per-key 10
         accounts (atom (w/initial-accounts))
-        gen      (->> (w/generator {:accounts accounts
-                                    :max-writes-per-key max-writes-per-key
-                                    :key-count          10
-                                    :key-dist-base      2})
+        gen      (->> (w/generator! {:accounts           accounts
+                                     :max-writes-per-key max-writes-per-key
+                                     :key-count          10
+                                     :key-dist-base      2})
                       (gen/limit n))
         ops      (gt/quick gen)
         ops-by-f (group-by :f ops)]
 
     (testing "fs"
       (is (= #{:txn :balance :txn-log} (set (keys ops-by-f)))))
+
+    (testing "txids"
+      (is (->> (:txn ops-by-f) (every? (comp integer? :id :value))))
+      (is (->> (:txn ops-by-f) (map (comp :id :value)) distinct?)))
+
+    (testing "adds keys to accounts"
+      (let [ks (->> ops (mapcat keys-in) (into (sorted-set)))
+            as (->> @accounts :by-id keys (into (sorted-set)))]
+        (is (set/subset? ks as))
+        (pprint (set/difference ks as))))
+
+    (testing "txn from"
+      (is (->> (:txn ops-by-f) (every? (comp integer? :from :value)))))
 
     (testing "key distribution"
       (testing "valid IDs"
@@ -46,7 +61,7 @@
         (let [ks (->> (:txn ops-by-f)
                       (mapcat (comp distinct keys-in))
                       frequencies
-                      (remove (comp w/default-account-id? key))
+                      (remove (comp u/default-account-id? key))
                       (map val))]
           (is (every? #(<= % max-writes-per-key) ks))))
 

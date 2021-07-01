@@ -7,21 +7,9 @@
                     [generator :as gen]
                     [util :as util]]
             [jepsen.radix-dlt [checker :as rchecker]
-                              [client :as rc]]
+                              [client :as rc]
+                              [util :as u]]
             [slingshot.slingshot :refer [try+ throw+]]))
-
-(def fee
-  "How much are fees?"
-  100000000000000000N)
-
-(def default-account-ids
-  "The IDs of the accounts that the default universe ships with."
-  (range 1 6))
-
-(defn default-account-id?
-  "Is this a default account ID?"
-  [id]
-  (< 0 id 6))
 
 (defn accounts
   "This structure helps us track the mapping between our logical account IDs
@@ -95,7 +83,7 @@
                  :key-pair  key-pair
                  :address   (rc/key-pair->account-address key-pair)})))
           (accounts)
-          default-account-ids))
+          u/default-account-ids))
 
 (defmacro with-errors
   "Takes an operation and a body. Evaluates body, converting known exceptions to fail/info operations."
@@ -104,8 +92,10 @@
          (catch [:type :timeout] e#
            (assoc ~op :type :info, :error :timeout))
          (catch [:type :radix-dlt/failure, :code 1500] e#
-           (assoc ~op :type :info, :error [:substate-not-found
-                                           (:message e#)]))))
+           (assoc ~op :type :fail, :error [:substate-not-found
+                                           (:message e#)]))
+         (catch [:type :radix-dlt/failure, :code 2515] e#
+           (assoc ~op :type :fail, :error :insufficient-balance))))
 
 
 (defrecord Client [conn node accounts token-rri]
@@ -223,16 +213,19 @@
                  long)]
       (-> gen :key-pool (nth ki)))))
 
-(defn gen-record-write
+(defn gen-record-write!
   "Takes a generator and a key index, and records that key as having been
   written. If the key is written more than max-writes-per-key, replaces the key
-  in the pool."
+  in the pool. As a side effect, adds new keys to the accounts index."
   [gen k]
   (let [writes (-> gen :write-counts (get k 0) inc)]
     ; If we've written it too much, replace it with a new key.
     (if (<= (:max-writes-per-key gen) writes)
       (let [k' (:next-key gen)
             ki (.indexOf ^java.util.List (:key-pool gen) k)]
+        ; Record this new account
+        (swap! (:accounts gen) conj-small-account k')
+
         (assoc gen
                :next-key     (inc k')
                :key-pool     (assoc (:key-pool gen) ki k')
@@ -268,20 +261,21 @@
                  (mapv (fn [_]
                          [:transfer from (gen-rand-key gen)
                           ; For an amount pick 1-100x fee
-                          (-> 100 rand-int inc (* fee))])))
+                          (-> 100 rand-int inc (* u/fee))])))
         ; What accounts are we touching?
         tos   (->> ops (map #(nth % 2)) set)
         ; Don't bother with default accounts; they're excluded from write
         ; counting
         accts (->> (conj tos from)
-                   (remove default-account-id?))
+                   (remove u/default-account-id?))
         ; Record those as being written
-        gen' (reduce gen-record-write gen accts)]
-    ; Record new keys in accounts
-    (->> accts
-         (filter (partial gen-first-write-of? gen))
-         (mapv (partial swap! (:accounts gen) conj-small-account)))
-    [{:from from, :ops ops} gen']))
+        gen' (reduce gen-record-write! gen accts)
+        ; And bump the txn id
+        gen' (update gen' :next-txn-id inc)]
+
+    [{:id   (:next-txn-id gen)
+      :from from
+      :ops  ops} gen']))
 
 ; This stores the state we need to select keys, and generates all three types
 ; of operations: transactions, balance reads, and txn-log reads.
@@ -295,6 +289,7 @@
    key-pool     ; A vector of active keys; always of size key-count
    write-counts ; A map of keys to the number of times they've been written.
    next-key     ; What's the next key we'll allocate?
+   next-txn-id  ; What's our next transaction ID?
    ]
   gen/Generator
   (update [this test context event]
@@ -318,7 +313,7 @@
           :balance [(assoc op :value {:account (rand-nth key-pool)})
                     this])))))
 
-(defn generator
+(defn generator!
   "Constructs a Generator out of an options map. Options are:
 
     :accounts             An atom to an accounts structure
@@ -375,16 +370,22 @@
   these accounts specially: when we *would* have transferred money from a fresh
   account, we emit a special transaction which fills up that account with funds
   from a default account. From that point on, we can derive our account IDs
-  from an exponentially-distributed rotating pool of non-default accounts."
+  from an exponentially-distributed rotating pool of non-default accounts.
+
+  As a side-effect, adds initial accounts to the accounts atom."
   [opts]
   (let [key-dist  (:key-dist opts :exponential)
         key-count (:key-count opts (case key-dist
                                      :exponential 10
                                      :uniform     3))
         key-pool (->> (iterate inc 1)
-                      (remove default-account-id?)
+                      (remove u/default-account-id?)
                       (take key-count)
                       vec)]
+    ; Record initial keys as accounts
+    (doseq [k key-pool]
+      (swap! (:accounts opts) conj-small-account k))
+    ; And build generator
     (map->Generator
       {:accounts           (:accounts opts)
        :key-dist           key-dist
@@ -394,7 +395,8 @@
        :max-txn-size       (:max-txn-size opts 4)
        :key-pool           key-pool
        :write-counts       {}
-       :next-key           (inc (peek key-pool))})))
+       :next-key           (inc (peek key-pool))
+       :next-txn-id        0})))
 
 (defn workload
   "Constructs a package of a client and generator."
@@ -402,7 +404,7 @@
   (let [accounts (atom (initial-accounts))]
     {:client          (client accounts)
      :checker         (rchecker/checker)
-     :generator       (generator (assoc opts :accounts accounts))
+     :generator       (generator! (assoc opts :accounts accounts))
      :final-generator (gen/each-thread
                         (delay
                           (->> @accounts

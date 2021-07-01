@@ -205,7 +205,9 @@
 (defn ^UInt256 uint256
   "Turns a number into a UInt256"
   [n]
-  (UInt256/from n))
+  (condp instance? n
+    clojure.lang.BigInt (UInt256/from (str n))
+    Long                (UInt256/from ^long n)))
 
 ;; Keypair management
 

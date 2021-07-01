@@ -17,7 +17,8 @@
   logically quantized: each distinct balance has an equally-sized range,
   because the values involved here are sparse and distinguished by vastly
   different scales."
-  (:require [clojure.string :as str]
+  (:require [clojure [pprint :refer [pprint]]
+                     [string :as str]]
             [clojure.tools.logging :refer [info warn]]
             [clj-time.coerce :as t-coerce]
             [hiccup.core :as h]
@@ -28,7 +29,8 @@
             [jepsen.radix-dlt.checker.util :refer [known-balances
                                                    txn-id
                                                    txn-logs
-                                                   op-accounts]]))
+                                                   op-accounts]]
+            [slingshot.slingshot :refer [try+ throw+]]))
 
 (def stylesheet nil)
 
@@ -62,12 +64,14 @@
   column indices"
   [history]
   (let [bs (known-balances history)]
-    (assert (= 1 (count bs)))
-    (->> bs first val
-         ; Balances generally fall thanks to fees, so we reverse these
-         reverse
-         (map-indexed (fn [i balance] [balance i]))
-         (into {}))))
+    (condp = (count bs)
+      0 {}
+      1 (->> bs first val
+             ; Balances generally fall thanks to fees, so we reverse these
+             reverse
+             (map-indexed (fn [i balance] [balance i]))
+             (into {}))
+      (throw+ {:type :extra-balances!? :balances bs}))))
 
 (defn partial-coords
   "Takes an invocation and a completion, and constructs a map of
