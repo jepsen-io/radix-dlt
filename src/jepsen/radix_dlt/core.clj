@@ -23,13 +23,16 @@
             :checker          (checker/compose
                                 {:workload (:checker workload)
                                  :perf     (checker/perf)
-                                 :stats    (checker/stats)})
+                                 :stats    (checker/stats)
+                                 :ex       (checker/unhandled-exceptions)})
             :generator        (gen/phases
                                 (->> (:generator workload)
                                      (gen/nemesis nil)
                                      (gen/time-limit (:time-limit opts)))
-                                (gen/log "Waiting for recovery...")
-                                (gen/sleep 60)
+                                (gen/log (str "Waiting "
+                                              (:recovery-time opts)
+                                              " seconds for recovery..."))
+                                (gen/sleep (:recovery-time opts))
                                 (->> (:final-generator workload)
                                      (gen/clients)))})))
 
@@ -48,6 +51,9 @@
 
    [nil "--radix-git-version COMMIT" "What commit from radix-dlt should we check out?"
     :default "09e06232ac26e51faf567bc0af7324341508ddfc"]
+
+   [nil "--recovery-time SECONDS" "How long should we wait for cluster recovery before final reads?"
+    :default 10]
 
    [nil "--txn-rate HZ" "Target number of transactions per second"
     :default 1
