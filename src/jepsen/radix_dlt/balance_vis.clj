@@ -42,7 +42,7 @@
   "How wide, in em, is a balance track?"
   1)
 
-(def stylesheet
+(def balance-stylesheet
   (str ".ops { position: absolute; width: 100%; }\n"
        ".op  { position: absolute; padding: 2px; border-radius: 2px; box-shadow: 0 1px 3px rgba(0,0,0,0.12), 0 1px 2px rgba(0,0,0,0.24); overflow: hidden; z-index: 2 }\n"
        ".op.balance { background: #A5F7B7 }\n"
@@ -157,20 +157,79 @@
                       (str "t" id)
                       ])))))))
 
-(defn render-account!
-  "Writes out an account's HTML file."
-  [test history account]
-  (let [history  (account-history account history)
-        txn-log  (-> history txn-logs (get account))
-        analysis {:history       history
-                  :txn-log       txn-log
-                  :balance-index (balance-index history)}]
+(defn render-account-balances!
+  "Writes out an HTML file for an account's analysis, plotting operations on a
+  time x balance space."
+  [analysis]
+  (let [{:keys [account test]} analysis]
     (->> (h/html [:html
                   [:head
-                   [:style stylesheet]]]
+                   [:style balance-stylesheet]]]
                  [:body
-                  [:h1 (str "Account " account)]
+                  [:h1 (str "Account " account " balances")]
                   [:div {:class "ops"}
                    (render-balances analysis)
                    (render-txns     analysis)]])
-         (spit (store/path! test "balances" (str account ".html"))))))
+         (spit (store/path! test "accounts" (str account "-balance.html"))))))
+
+(def txn-log-stylesheet
+  "CSS styles for the transaction log."
+  "")
+
+(defn render-account-txn-log!
+  "Writes out an HTML file for an account's longest transaction log."
+  [analysis]
+  (let [{:keys [test account txn-log]} analysis]
+    (->> (h/html [:html
+                  [:head
+                   [:style txn-log-stylesheet]]
+                  [:body
+                   [:h1 (str "Account " account " transaction log")]
+                   [:div {:class "ops"}
+                    [:pre
+                     (->> txn-log
+                          :txns
+                          (map (fn [txn]
+                                 (update txn :actions
+                                         (partial map (fn [op]
+                                                        (dissoc op
+                                                                :rri
+                                                                :validator))))))
+                          util/pprint-str)]]]])
+         (spit (store/path! test "accounts" (str account "-txn-log.html"))))))
+
+(def txn-stylesheet
+  "CSS for the transaction view."
+  "")
+
+(defn render-account-timeline!
+  "Writes out an HTML file that represents all ops involving that
+  account."
+  [{:keys [test account history]}]
+  (let [pairs         (history/pairs+ history)
+        pair-count    (count pairs)
+        process-index (timeline/process-index history)]
+  (->> (h/html
+         [:html
+          [:head
+           [:style timeline/stylesheet]]
+          [:body
+           [:h1 (str "Account " account " transactions")]
+           [:div {:class "ops"}
+            (map (partial timeline/pair->div history test process-index)
+                 pairs)]]])
+       (spit (store/path! test "accounts" (str account "-timeline.html"))))))
+
+(defn render-account!
+  "Writes out an account's HTML files."
+  [test history account]
+  (let [history  (account-history account history)
+        txn-log  (-> history txn-logs (get account))
+        analysis {:test          test
+                  :account       account
+                  :history       history
+                  :txn-log       txn-log
+                  :balance-index (balance-index history)}]
+    (render-account-balances! analysis)
+    (render-account-txn-log!  analysis)
+    (render-account-timeline! analysis)))
