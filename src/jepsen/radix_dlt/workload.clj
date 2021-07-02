@@ -256,11 +256,12 @@
   [gen]
   (let [; What account is performing this transaction?
         from  (gen-rand-key gen)
-        ; Is this the first time we've used this from address? If so, replace
-        ; it with a default account; no sense in pulling money out of thin air.
-        ; TODO: make this sliiightly probabilistic?
-        from  (if (gen-first-write-of? gen from)
-                1 ; Default acct
+        ; Is this account funded? If not, let's replace it with the default
+        ; address probabilistically; no sense in pulling money out of thin air.
+        from  (if (and (< (rand) 1.0)
+                       (not (get (:funded? gen) from)))
+                (do (info :account from :not-funded)
+                    1)
                 from)
         ; How many actions should we generate?
         n     (inc (rand-int (:max-txn-size gen)))
@@ -303,12 +304,42 @@
    accounts     ; An atom to an accounts structure
    key-pool     ; A vector of active keys; always of size key-count
    write-counts ; A map of keys to the number of times they've been written.
+   funded?      ; A map of keys to whether we think they currently contain XRD.
    next-key     ; What's the next key we'll allocate?
    next-txn-id  ; What's our next transaction ID?
    ]
   gen/Generator
   (update [this test context event]
-    this)
+    (let [{:keys [type f value]} event]
+      ; For transactions...
+      (case f
+        ; When we see a txn go through...
+        :txn
+        (case (:type event)
+          ; Record receiving accounts as being funded
+          :ok (let [funded?' (reduce (fn [funded? [f from to amount]]
+                                       (assoc funded? to true))
+                                     funded?
+                                     (:ops value))]
+                (assoc this :funded? funded?'))
+
+          ; When a transaction fails, decrement its write count; we can give it
+          ; another shot.
+          :fail (let [wc' (->> (:ops value)
+                               (map #(nth % 2))
+                               (cons (:from value))
+                               set
+                               (reduce (fn [wc k]
+                                         (if (contains? wc k)
+                                           (update wc k dec)
+                                           wc))
+                                       write-counts))]
+                  (assoc this :write-counts wc'))
+
+          this)
+
+        ; Not a txn
+        this)))
 
   (op [this test context]
     (let [f       (rand-nth [:txn :txn-log :balance])
@@ -412,6 +443,7 @@
        :max-txn-size       (:max-txn-size opts 4)
        :key-pool           key-pool
        :write-counts       {}
+       :funded?            {}
        :next-key           (inc (peek key-pool))
        :next-txn-id        0})))
 
