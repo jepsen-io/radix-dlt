@@ -213,6 +213,14 @@
                  long)]
       (-> gen :key-pool (nth ki)))))
 
+(defn gen-rand-read-key
+  "Selects a random key from a Generator for a read. We sometimes emit reads of
+  the default account 1, in addition to those in the pool."
+  [gen]
+  (if (< (rand) (/ (inc (:key-count gen))))
+    1
+    (gen-rand-key gen)))
+
 (defn gen-record-write!
   "Takes a generator and a key index, and records that key as having been
   written. If the key is written more than max-writes-per-key, replaces the key
@@ -314,10 +322,12 @@
                  [(assoc op :value transfer)
                   gen'])
 
-          :txn-log [(assoc op :value {:account (rand-nth key-pool)})
+          ; For transaction logs and balances, we either select a key from the
+          ; pool, or our default account 1.
+          :txn-log [(assoc op :value {:account (gen-rand-read-key this)})
                     this]
 
-          :balance [(assoc op :value {:account (rand-nth key-pool)})
+          :balance [(assoc op :value {:account (gen-rand-read-key this)})
                     this])))))
 
 (defn generator!
