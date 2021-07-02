@@ -260,8 +260,15 @@
         ops (->> (range n)
                  (mapv (fn [_]
                          [:transfer from (gen-rand-key gen)
-                          ; For an amount pick 1-100x fee
-                          (-> 100 rand-int inc (* u/fee))])))
+                          (if (u/default-account-id? from)
+                            ; If this is the first write, give them a bunch to
+                            ; play with; otherwise almost every transfer will
+                            ; fail.
+                            (-> 100 rand-int inc (* u/fee 10))
+
+                            ; For transfers between normal accounts, pick
+                            ; 1-100x fee
+                            (-> 100 rand-int inc (* u/fee)))])))
         ; What accounts are we touching?
         tos   (->> ops (map #(nth % 2)) set)
         ; Don't bother with default accounts; they're excluded from write
