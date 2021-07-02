@@ -27,6 +27,7 @@
                     [util :as util :refer [name+ pprint-str]]]
             [jepsen.checker.timeline :as timeline]
             [jepsen.radix-dlt.checker.util :refer [known-balances
+                                                   txn-log->balance->txn-ids
                                                    txn-id
                                                    txn-logs
                                                    op-accounts]]
@@ -46,6 +47,7 @@
   (str ".ops { position: absolute; width: 100%; }\n"
        ".op  { position: absolute; padding: 2px; border-radius: 2px; box-shadow: 0 1px 3px rgba(0,0,0,0.12), 0 1px 2px rgba(0,0,0,0.24); overflow: hidden; z-index: 2 }\n"
        ".op.balance { background: #A5F7B7 }\n"
+       ".op.balance.unresolved { background: #F7B7A5; }\n"
        ".op.txn { background: #A5DEF7 }\n"
        ".op.txn.unseen { background: #D0D0D0; z-index: 1 }\n"
        ))
@@ -91,26 +93,40 @@
   "Takes a map with:
 
     :history          A single-account history
+    :txn-log          An augmented transaction log for this account
     :balance-index    A map of balances to column indices
 
   and returns a sequence of boxes, one for each balance read."
-  [{:keys [balance-index history]}]
-  (->> history
-       (filter (comp #{:balance} :f))
-       history/pairs+
-       (keep (fn [[invoke complete]]
-               (let [{:keys [account balance]} (:value complete)]
-                 (if (= :ok (:type complete))
-                   [:div {:class "op balance"
-                          :style (timeline/style
-                                   (assoc (partial-coords invoke complete)
-                                          :left (-> balance-index
-                                                    (get balance)
-                                                    (* balance-width)
-                                                    (str "em"))))
-                          :title (str "Balance read: " balance "\n\n"
-                                      (timeline/render-op complete))}
-                    "b " balance]))))))
+  [{:keys [balance-index txn-log history]}]
+  (pprint :txn-log)
+  (pprint txn-log)
+  (let [balance->txn-ids (txn-log->balance->txn-ids txn-log)]
+    (->> history
+         (filter (comp #{:balance} :f))
+         history/pairs+
+         (keep (fn [[invoke complete]]
+                 (let [{:keys [account balance]} (:value complete)]
+                   (if (= :ok (:type complete))
+                     (let [txn-ids (if (nil? balance)
+                                     :init
+                                     (balance->txn-ids balance))
+                           txn-id (if (vector? txn-ids)
+                                    (peek txn-ids)
+                                    txn-ids)]
+                       [:div {:class (str "op balance"
+                                          (when (nil? txn-id)
+                                            " unresolved"))
+                              :style (timeline/style
+                                       (assoc (partial-coords invoke complete)
+                                              :left (-> balance-index
+                                                        (get balance)
+                                                        (* balance-width)
+                                                        (str "em"))))
+                              :title (str "Balance read: " balance
+                                          " from txn " (pr-str txn-id)
+                                          "\n\n"
+                                          (timeline/render-op complete))}
+                        "b " balance]))))))))
 
 (defn render-txns
   "Takes a map with:
@@ -224,7 +240,7 @@
   "Writes out an account's HTML files."
   [test history account]
   (let [history  (account-history account history)
-        txn-log  (-> history txn-logs (get account))
+        txn-log  (-> history txn-logs (get account {:account account}))
         analysis {:test          test
                   :account       account
                   :history       history

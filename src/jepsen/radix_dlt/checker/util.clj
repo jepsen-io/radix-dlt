@@ -154,7 +154,9 @@
 (defn txn-log->balance->txn-ids
   "Takes a txn-log. Plays forward the transactions, building a map of balances
   to the vector of transaction IDs which produced that balance, or :multiple if
-  more than one exists."
+  more than one exists.
+
+  A nil balance maps to the empty list [], as does the initial balance."
   [{:keys [account txns]}]
   ; First, we're going to need a series of vectors of transaction IDs: one for
   ; each set of transactions "read" by each balance.
@@ -168,8 +170,9 @@
   ; constructing subvecs of it as needed.
   (let [txn-ids (vec (keep txn-id txns))]
     ; Now, step through transactions, updating our account balance and building
-    ; a map of balances to subvecs of txn-ids
-    (loop [m       {}
+    ; a map of balances to subvecs of txn-id.
+    (loop [m       {nil                    []
+                    (init-balance account) []}
            balance (init-balance account)
            ; Index into our transactions list
            txn-i     0
