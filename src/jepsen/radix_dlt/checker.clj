@@ -302,9 +302,26 @@
                    :ambiguous-balances      (sample 6 ambiguous-balances)
                    :unseen-txn-ids          (unseen-txn-ids history))))))))
 
+(defn error-types
+  "A small checker which sums up the different kinds of errors we encounter"
+  []
+  (reify checker/Checker
+    (check [this test history opts]
+      (->> history
+           (keep :error)
+           (group-by (fn [e]
+                       ; Some errors are bare keywords, others are [:something,
+                       ; details]
+                       (if (keyword? e)
+                         e
+                         (first e))))
+           (map-vals count)
+           (merge {:valid? true})))))
+
 (defn checker
   "Unified checker."
   []
   (checker/compose
     {:timeline    (timeline/html)
+     :errors      (error-types)
      :list-append (list-append-checker)}))

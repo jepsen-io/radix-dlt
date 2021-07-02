@@ -144,15 +144,18 @@
                    ; We don't have an entry in the txn log for this. It might
                    ; have been serialized after our final read, or it might
                    ; have failed, or it might be ~illegal~; who knows. We'll
-                   ; render it as a full-width bar.
-                   [:div {:class "op txn unseen"
-                          :style (timeline/style
-                                   (-> (partial-coords invoke complete)
-                                       (assoc :left 0
-                                              :width "100%"
-                                              :right 0)))
-                          :title (str "Unseen txn:\n"
-                                      (timeline/render-op complete))}]))))))
+                   ; render it as a full-width bar if it's ok/info.
+                   (when (not= :fail (:type complete))
+                     [:div {:class "op txn unseen"
+                            :style (timeline/style
+                                     (-> (partial-coords invoke complete)
+                                         (assoc :left 0
+                                                :width "100%"
+                                                :right 0)))
+                            :title (str "Unseen txn:\n"
+                                        (timeline/render-op complete))}
+                      (str "t" id)
+                      ])))))))
 
 (defn render-account!
   "Writes out an account's HTML file."
