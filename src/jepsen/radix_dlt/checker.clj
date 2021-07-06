@@ -19,7 +19,8 @@
                                                    txn-id
                                                    txn-op-accounts
                                                    unseen-txn-ids]]
-            [jepsen.tests.cycle.append :as append]))
+            [jepsen.tests.cycle.append :as append]
+            [knossos [op :as op]]))
 
 (defn list-append-history
   "Takes a Radix-DLT history and rewrites it to look like an Elle list-append
@@ -289,6 +290,35 @@
            :inexplicable-balances inexplicable-balances}
           {:valid? true})))))
 
+(defn negative-checker
+  "Looks for cases where the balance of an account appears to have gone
+  negative."
+  []
+  (reify checker/Checker
+    (check [this test history {:keys [analysis] :as opts}]
+      (let [; Negative, but considers nil OK
+            neg?     (fnil neg? 0)
+            ; Scan balances for negatives--this is VERY bad!
+            balances (->> history
+                          (filter op/ok?)
+                          (filter (comp #{:balance} :f))
+                          (filter (comp neg? :balance :value)))
+            ; Scan txn logs for negative inferred balances--less bad, knowing
+            ; that txn logs appear to basically be swiss cheese, but still, we
+            ; shouldn't do this
+            txns (->> (:accounts analysis)
+                      vals
+                      (mapcat (fn [{:keys [account txn-log]}]
+                                (->> (:txns txn-log)
+                                     (filter (comp neg? :balance'))
+                                     (map (fn [txn]
+                                            {:account account
+                                             :txn txn}))))))]
+        {:valid? (and (not (seq balances))
+                      (not (seq txns)))
+         :txns      txns
+         :balances  balances}))))
+
 (defn balance-vis-checker
   "Renders balances, transaction logs, etc for each account"
   []
@@ -321,6 +351,7 @@
                    {:timeline     (timeline/html)
                     :errors       (error-types)
                     :inexplicable (inexplicable-balance-checker)
+                    :negative     (negative-checker)
                     :list-append  (list-append-checker)
                     :balance-vis  (balance-vis-checker)})]
     ; We want to compute the analysis just once, and let every checker use it
