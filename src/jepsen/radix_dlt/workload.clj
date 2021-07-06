@@ -260,8 +260,7 @@
         ; address probabilistically; no sense in pulling money out of thin air.
         from  (if (and (< (rand) 1.0)
                        (not (get (:funded? gen) from)))
-                (do (info :account from :not-funded)
-                    1)
+                1
                 from)
         ; How many actions should we generate?
         n     (inc (rand-int (:max-txn-size gen)))

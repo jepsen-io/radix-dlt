@@ -10,39 +10,16 @@
             [jepsen.checker.timeline :as timeline]
             [jepsen.radix-dlt [balance-vis :as balance-vis]
                               [util :as u]]
-            [jepsen.radix-dlt.checker.util :refer [account->balance->txn-ids
+            [jepsen.radix-dlt.checker.util :refer [analysis
+                                                   account->balance->txn-ids
                                                    all-accounts
                                                    longest-txn-logs
                                                    mop-accounts
                                                    op-accounts
                                                    txn-id
-                                                   txn-op-accounts]]
+                                                   txn-op-accounts
+                                                   unseen-txn-ids]]
             [jepsen.tests.cycle.append :as append]))
-
-(defn unseen-txn-ids
-  "Takes a Radix history and computes a map of accounts to collections of
-  unseen transaction IDs---those which did not appear in the longest txn
-  history."
-  [history]
-  (let [seen (->> (longest-txn-logs history)
-                  (map-vals (comp set :id :txns)))]
-    ; Find all the txns that *could* have taken effect
-    (->> history
-         (filter (comp #{:txn} :f))
-         (filter (comp #{:ok :info} :type))
-         ; Take these transactions and build a map of accounts to possible txn
-         ; ids, only if they're not in the longest sets.
-         (reduce (fn [m op]
-                   (let [id (:id (:value op))]
-                     (reduce (fn [m acct]
-                               (let [seen (get seen acct (sorted-set))]
-                                 (if (seen id)
-                                   m
-                                   ; Aha, an unseen txn!
-                                   (assoc m acct (conj (get m acct []) id)))))
-                             m
-                             (txn-op-accounts op))))
-                 {}))))
 
 (defn list-append-history
   "Takes a Radix-DLT history and rewrites it to look like an Elle list-append
@@ -68,10 +45,6 @@
               (let [id  (:id value)
                     ; Generate synthetic transaction writing to all involved
                     ; accounts
-                    ;_ (when (= id 9)
-                    ;    (info "Generating txn for" id ":" op "\n"
-                    ;          (->> (txn-op-accounts op)
-                    ;               (mapv (fn [acct] [:append acct id])))))
                     txn (->> (txn-op-accounts op)
                              (mapv (fn [acct] [:append acct id])))]
                 (assoc op :value txn))
@@ -268,7 +241,9 @@
                               :consistency-models [:strict-serializable]})]
     (reify checker/Checker
       (check [this test history opts]
-        (let [history    (subvec history 0 500)
+        (let [; TODO: unrestrict history! We're just doing this to avoid
+              ; constant timeouts!
+              history    (subvec history 0 500)
               la-history (list-append-history history)]
           ;(info :history (pprint-str la-history))
           ; Oh this is such a gross hack. There's all this *really* nice,
@@ -290,10 +265,6 @@
                 ambiguous-balances (filter (comp #{:ambiguous-balance} :error)
                                            info-balances)]
 
-            ; Render balance visualizations
-            (doseq [account (all-accounts history)]
-              (balance-vis/render-account! test history account))
-
             (assoc res
                    :ok-balance-count        (count ok-balances)
                    :unknown-balance-count   (count unknown-balances)
@@ -301,6 +272,31 @@
                    :unknown-balances        (sample 6 unknown-balances)
                    :ambiguous-balances      (sample 6 ambiguous-balances)
                    :unseen-txn-ids          (unseen-txn-ids history))))))))
+
+(defn inexplicable-balance-checker
+  "Looks for cases where we can't explain how some balance was ever read."
+  []
+  (reify checker/Checker
+    (check [this test history {:keys [analysis] :as opts}]
+      ;(info :accounts
+      ;      (pprint-str (:accounts analysis)))
+      (let [inexplicable-balances (->> (:accounts analysis)
+                                       vals
+                                       (mapcat :inexplicable-balances)
+                                       (sort-by :index))]
+        (if (seq inexplicable-balances)
+          {:valid? false
+           :inexplicable-balances inexplicable-balances}
+          {:valid? true})))))
+
+(defn balance-vis-checker
+  "Renders balances, transaction logs, etc for each account"
+  []
+  (reify checker/Checker
+    (check [this test history {:keys [analysis] :as opts}]
+      (doseq [account (keys (:accounts analysis))]
+        (balance-vis/render-account! test analysis account))
+      {:valid? true})))
 
 (defn error-types
   "A small checker which sums up the different kinds of errors we encounter"
@@ -321,7 +317,16 @@
 (defn checker
   "Unified checker."
   []
-  (checker/compose
-    {:timeline    (timeline/html)
-     :errors      (error-types)
-     :list-append (list-append-checker)}))
+  (let [composed (checker/compose
+                   {:timeline     (timeline/html)
+                    :errors       (error-types)
+                    :inexplicable (inexplicable-balance-checker)
+                    :list-append  (list-append-checker)
+                    :balance-vis  (balance-vis-checker)})]
+    ; We want to compute the analysis just once, and let every checker use it
+    ; independently.
+    (reify checker/Checker
+      (check [this test history opts]
+        (let [analysis (analysis history)]
+          (checker/check composed test history
+                         (assoc opts :analysis analysis)))))))

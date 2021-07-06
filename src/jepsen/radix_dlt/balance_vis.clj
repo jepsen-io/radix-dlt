@@ -52,15 +52,6 @@
        ".op.txn.unseen { background: #D0D0D0; z-index: 1 }\n"
        ))
 
-(defn account-history
-  "Restricts a history to a single account, and assigns each operation a
-  sequential :sub-index."
-  [account history]
-  (->> history
-       (filter (fn of-interest? [op] (contains? (op-accounts op) account)))
-       (map-indexed (fn sub-index [i op] (assoc op :sub-index i)))
-       vec))
-
 (defn balance-index
   "Takes a single account history, and returns a map of balances to
   column indices"
@@ -98,8 +89,8 @@
 
   and returns a sequence of boxes, one for each balance read."
   [{:keys [balance-index txn-log history]}]
-  (pprint :txn-log)
-  (pprint txn-log)
+  ;(pprint :txn-log)
+  ;(pprint txn-log)
   (let [balance->txn-ids (txn-log->balance->txn-ids txn-log)]
     (->> history
          (filter (comp #{:balance} :f))
@@ -238,9 +229,9 @@
 
 (defn render-account!
   "Writes out an account's HTML files."
-  [test history account]
-  (let [history  (account-history account history)
-        txn-log  (-> history txn-logs (get account {:account account}))
+  [test analysis account]
+  (let [history  (get-in analysis [:accounts account :history])
+        txn-log  (get-in analysis [:accounts account :txn-log])
         analysis {:test          test
                   :account       account
                   :history       history

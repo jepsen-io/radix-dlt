@@ -3,6 +3,7 @@
 
   See https://github.com/radixdlt/radixdlt/blob/1.0-beta.35.1/radixdlt-java/radixdlt-java/src/test/java/com/radixdlt/client/lib/impl/SynchronousRadixApiClientTest.java for some test example code."
   (:require [clojure.tools.logging :refer [info warn]]
+            [clojure.core.typed :as t]
             [dom-top.core :as dt :refer [assert+]]
             [jepsen [util :as util :refer [pprint-str]]]
             [potemkin :refer [def-derived-map]]

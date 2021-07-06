@@ -13,6 +13,9 @@
                  [com.radixdlt/radixdlt-java "1.0-beta.35.1-release~1.0-beta.35-SNAPSHOT"]
                  [jepsen/jepsen "0.2.5-SNAPSHOT"
                   :exclusions [com.fasterxml.jackson.core/jackson-core]]
-                 [mvxcvi/clj-cbor "1.1.0"]]
+                 [mvxcvi/clj-cbor "1.1.0"]
+                 ; Types
+                 [org.clojure.typed/runtime.jvm "1.0.1"]]
+  :profiles {:dev {:dependencies [[org.clojure.typed/checker.jvm "1.0.1"]]}}
   :repl-options {:init-ns jepsen.radix-dlt.core}
   :main jepsen.radix-dlt.core)
