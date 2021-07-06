@@ -18,10 +18,10 @@
 (t/ann ^:no-check default-account-ids (t/ASeq Account))
 (def default-account-ids
   "The IDs of the accounts that the default universe ships with."
-  (range 1 6))
+  (range 1 7))
 
 (t/ann default-account-id? [Account -> Boolean])
 (defn default-account-id?
   "Is this a default account ID?"
   [id]
-  (< 0 id 6))
+  (< 0 id 7))

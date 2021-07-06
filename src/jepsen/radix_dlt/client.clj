@@ -459,8 +459,11 @@
   [node]
   (info "Waiting for initial convergence...")
   (let [client (open node)]
-    (let [k1 (key-pair 1)
-          k2 (key-pair 2)
+    ; We choose key 5 here so as not to interfere with key 1, which the
+    ; workload uses extensively. This simplifies our checker: key 1 won't have
+    ; any initial balance-changing transactions to factor into account.
+    (let [k1 (key-pair 5)
+          k2 (key-pair 5)
           addr1 (key-pair->account-address k1)
           addr2 (key-pair->account-address k2)
           ; Before the API is ready, we'll get HTML error pages from nginx
