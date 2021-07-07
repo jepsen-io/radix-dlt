@@ -12,11 +12,13 @@
   An 'unlogged' transaction is one which is not logged, but could have
   happened (i.e. its txn was :ok or :info)
 
-  A 'resolved' balance is one which is uniquely resolvable to a specific
+  A 'unique' balance is one which is uniquely resolvable to a specific
   transaction in the transaction log.
 
   An 'ambiguous' balance is one which is resolvable to more than one
   transaction in the transaction log.
+
+  An 'unresolvable' balance doesn't correspond to any point in the txn log.
 
   An 'explicable' balance is one which is resolvable to at least one
   transaction in the transaction log, plus zero or more extant unlogged
@@ -363,8 +365,7 @@
   (or nil if none are known)."
   [txn-log]
   (->> (:txns txn-log)
-       (map (juxt :balance' identity))
-       (into {})
+       (group-by :balance')
        (assoc txn-log :by-balance')))
 
 (defn txn-logs
@@ -390,99 +391,6 @@
                        add-balances-to-txn-log
                        add-id-index-to-txn-log
                        add-balance'-index-to-txn-log)))))
-
-(defn txn-log->balance->txn-ids
-  "Takes a txn-log. Plays forward the transactions, building a map of balances
-  to the vector of transaction IDs which produced that balance, or :multiple if
-  more than one exists.
-
-  A nil balance maps to the empty list [], as does the initial balance."
-  [{:keys [account txns]}]
-  ; First, we're going to need a series of vectors of transaction IDs: one for
-  ; each set of transactions "read" by each balance.
-  ;
-  ;   []
-  ;   [1]
-  ;   [1 3]
-  ;   [1 3 8]
-  ;   ...
-  ; We're going to do this by constructing a single vector of all txn IDs, and
-  ; constructing subvecs of it as needed.
-  (let [txn-ids (vec (keep txn-id txns))]
-    ; Now, step through transactions, updating our account balance and building
-    ; a map of balances to subvecs of txn-id.
-    (loop [m       {nil                    []
-                    (init-balance account) []}
-           balance (init-balance account)
-           ; Index into our transactions list
-           txn-i     0
-           ; Index into the transaction ids list, since not all txns *have* IDs
-           txn-ids-i -1]
-      (if (<= (count txns) txn-i)
-        ; Done!
-        m
-        ; OK, let's look at this transaction
-        (let [txn        (nth txns txn-i)
-              ; If this transaction has an ID, we should step one further into
-              ; the txn-ids vector.
-              txn-ids-i' (if (txn-id txn)
-                           (inc txn-ids-i)
-                           txn-ids-i)
-              ; What's the resulting balance if we apply it?
-              balance'  (apply-txn account balance txn)
-              ; Do we already have an entry for this balance?
-              extant    (get m balance')
-              m'        (assoc m balance'
-                               (if extant
-                                 ; If we already have a list, convert it to
-                                 ; :multiple
-                                 :multiple
-                                 ; If not, we know this sequence of
-                                 ; transactions produced this balance.
-                                 (subvec txn-ids 0 (inc txn-ids-i'))))]
-          (recur m' balance' (inc txn-i) txn-ids-i'))))))
-
-(defn account->balance->txn-ids
-  "Takes a Radix history and computes a map of accounts to maps of balances to
-  the sequence of transaction IDs which produced that balance. If we don't know
-  how a balance was produced, that value is `nil`; if a balance is not unique
-  within an account, that value is `:multiple`."
-  [history]
-  (->> history
-       txn-logs
-       (map-vals txn-log->balance->txn-ids)))
-
-(defn balance-balances
-  "Takes a Radix history and returns a map of accounts to the sorted set of all
-  balances we observed via a :balance operation on that account."
-  [history]
-  (->> history
-       (filter op/ok?)
-       (filter (comp #{:balance} :f))
-       (map :value)
-       (reduce (fn [balances {:keys [account balance]}]
-                 (let [bs (-> (get balances account (sorted-set))
-                              (conj balance))]
-                   (assoc balances account bs)))
-               {})))
-
-(defn txn-log-balances
-  "Takes a Radix history and returns a map of accounts to the sorted set of all
-  balances we think occurred, thanks to the longest :txn-log operation."
-  [history]
-  (->> (account->balance->txn-ids history)
-       (map-vals (fn [balances->txn-ids]
-                   (->> balances->txn-ids
-                        keys
-                        (into (sorted-set)))))))
-
-(defn known-balances
-  "Takes a Radix history and returns a map of accounts to the sorted set of all
-  balances we think definitely occurred on that account."
-  [history]
-  (merge-with set/union
-              (balance-balances history)
-              (txn-log-balances history)))
 
 (defn unseen-txn-ids
   "Takes a Radix history and computes a map of accounts to collections of
@@ -598,7 +506,35 @@
                   (recur (next history) balances unlogged-deltas
                          (conj inexplicable
                                {:op       op
-                                :expected (sort balances)})))))))))))
+                                :expected (into (sorted-set) balances)})))))))))))
+
+(defn balance-balances
+  "Takes an account analysis and returns a set of all balances we
+  observed via a :balance operation on that account."
+  [account-analysis]
+  (->> (:history account-analysis)
+       (filter op/ok?)
+       (filter (comp #{:balance} :f))
+       (keep (comp :balance :value))
+       set))
+
+(defn txn-log-balances
+  "Takes an account analysis and returns a set of all balances we think
+  occurred based on the txn log."
+  [account-analysis]
+  (->> (:txn-log account-analysis)
+       :txns
+       (map :balance')
+       set))
+
+(defn known-balances
+  "Takes a partial account analysis and returns a sorted set of all balances we
+  think occurred for that account."
+  [account-analysis]
+  (into (sorted-set)
+        (concat [(init-balance (:account account-analysis))]
+                (balance-balances account-analysis)
+                (txn-log-balances account-analysis))))
 
 (defn add-accounts
   "Takes an analysis and adds an :accounts map to it."
@@ -626,10 +562,13 @@
                                       :logged-txn-ids   logged-txn-ids
                                       :unlogged-txn-ids unlogged-txn-ids}
                     ; And go on to compute inexplicable balances
-                    account-analysis (assoc account-analysis
-                                            :inexplicable-balances
-                                            (inexplicable-balances
-                                              account-analysis))]
+                    account-analysis (-> account-analysis
+                                         (assoc :inexplicable-balances
+                                                (inexplicable-balances
+                                                  account-analysis))
+                                         (assoc :known-balances
+                                                (known-balances
+                                                  account-analysis)))]
                 (assoc-in analysis [:accounts account] account-analysis)))
             analysis
             (all-accounts history))))
@@ -667,5 +606,31 @@
       add-pair-index
       add-txn-index
       add-accounts))
+
+(defn balance->txn-id-prefix
+  "Takes an analysis, an account, and a balance. Returns:
+
+  nil             if that balance was either `nil` or the initial balance
+  [t1 ... tn]     if that balance was uniquely resolvable to tn.
+  :unresolvable   if that balance is unresolvable
+  :ambiguous      if that balance is resolvable to multiple points in the log"
+  [analysis account balance]
+  (let [txn-log (get-in analysis [:accounts account :txn-log])]
+    (cond (nil? balance)                      nil
+          (= balance (init-balance account))  nil
+          :else (let [txns (get-in txn-log [:by-balance' balance])]
+                  (info :account account :balance balance :txns (pr-str txns))
+                  (case (count txns)
+                    0 :unresolvable
+                    1 (let [id (:id (first txns))
+                            _ (assert (integer? id))
+                            prefix (->> (:txns txn-log)
+                                        (keep :id)
+                                        (take-while (complement #{id}))
+                                        vec)
+                            ids (conj prefix id)]
+                        (assert (every? integer? ids))
+                        ids)
+                    :ambiguous)))))
 
 )

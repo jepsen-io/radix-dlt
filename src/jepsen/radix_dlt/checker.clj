@@ -11,11 +11,8 @@
             [jepsen.radix-dlt [balance-vis :as balance-vis]
                               [util :as u]]
             [jepsen.radix-dlt.checker.util :refer [analysis
-                                                   account->balance->txn-ids
-                                                   all-accounts
-                                                   longest-txn-logs
-                                                   mop-accounts
-                                                   op-accounts
+                                                   balance->txn-id-prefix
+                                                   init-balance
                                                    txn-id
                                                    txn-op-accounts
                                                    unseen-txn-ids]]
@@ -23,7 +20,7 @@
             [knossos [op :as op]]))
 
 (defn list-append-history
-  "Takes a Radix-DLT history and rewrites it to look like an Elle list-append
+  "Takes an analysis and rewrites its history to look like an Elle list-append
   history.
 
   :txn operations are rewritten to a transaction which appends the transaction
@@ -36,60 +33,54 @@
   :balance operations are (and this is such a hack) also mapped to reads of
   lists of txn ids: we play forward what we *think* the sequence of txns was,
   and use that to construct a mapping of balances to sequences of txns."
-  [history]
-  (let [account->balance->txn-ids (account->balance->txn-ids history)]
-    ;(info :account->balance->txn-ids
-    ;      (pprint-str account->balance->txn-ids))
-    (mapv (fn [{:keys [type f value] :as op}]
-            (case f
-              :txn
-              (let [id  (:id value)
-                    ; Generate synthetic transaction writing to all involved
-                    ; accounts
-                    txn (->> (txn-op-accounts op)
-                             (mapv (fn [acct] [:append acct id])))]
-                (assoc op :value txn))
+  [{:keys [accounts history] :as analysis}]
+  ;(info :account->balance->txn-ids
+  ;      (pprint-str account->balance->txn-ids))
+  (mapv (fn [{:keys [type f value] :as op}]
+          (case f
+            :txn
+            (let [id  (:id value)
+                  ; Generate synthetic transaction writing to all involved
+                  ; accounts
+                  txn (->> (txn-op-accounts op)
+                           (mapv (fn [acct] [:append acct id])))]
+              (assoc op :value txn))
 
-              :txn-log
-              (let [k   (:account value)
-                    ; Find all txids
-                    ids (when (= type :ok)
-                          (->> (:txns value)
-                               (keep txn-id)
-                               vec))]
-                (assoc op :value [[:r k ids]]))
+            :txn-log
+            (let [k   (:account value)
+                  ; Find all txids
+                  ids (when (= type :ok)
+                        (->> (:txns value)
+                             (keep txn-id)
+                             vec))]
+              (assoc op :value [[:r k ids]]))
 
-              :balance
-              (if (= type :ok)
-                (let [{:keys [account balance]} value
-                      txn-ids (get-in account->balance->txn-ids
-                                      [account balance])]
-                  (case txn-ids
-                    ; We info this read, since we don't know WHERE this came
-                    ; from
-                    nil
-                    (assoc op
-                           :type    :info
-                           :error   :unknown-balance
-                           :balance (:balance value)
-                           :value   [[:r account nil]])
+            :balance
+            (if (not= type :ok)
+              ; For invocations, infos, fails, we just turn this into a nil
+              ; read.
+              (assoc op :value [[:r (:account value) nil]])
 
-                    :multiple
-                    ; We info this read, since it can't be interpreted
-                    ; distinctly
-                    (assoc op
-                           :type    :info
-                           :error   :ambiguous-balance
-                           :balance (:balance value)
-                           :value   [[:r account nil]])
+              ; For ok balances, try to resolve what string of txns they saw
+              (let [{:keys [account balance]} value
+                    ids (balance->txn-id-prefix analysis account balance)]
+                (case ids
+                  :unresolvable
+                  (assoc op
+                         :type    :info
+                         :error   :unresolvable-balance
+                         :balance (:balance value)
+                         :value   [[:r account nil]])
 
-                    ; Great, we know which txns must have produced this
-                    (assoc op :type :ok, :value [[:r account txn-ids]])))
+                  :ambiguous
+                  (assoc op
+                         :type    :info
+                         :error   :ambiguous-balance
+                         :balance (:balance value)
+                         :value   [[:r account nil]])
 
-                ; For invocations, infos, fails, we just turn this into a nil
-                ; read.
-                (assoc op :value [[:r (:account value) nil]]))))
-          history)))
+                  (assoc op :type :ok, :value [[:r account ids]]))))))
+        history))
 
 (defn write?
   "Is this a write operation?"
@@ -241,11 +232,11 @@
                               :cycle-search-timeout 100000
                               :consistency-models [:strict-serializable]})]
     (reify checker/Checker
-      (check [this test history opts]
+      (check [this test history {:keys [analysis] :as opts}]
         (let [; TODO: unrestrict history! We're just doing this to avoid
               ; constant timeouts!
-              history    (subvec history 0 500)
-              la-history (list-append-history history)]
+              ;history    (subvec history 0 500)
+              la-history (list-append-history analysis)]
           ;(info :history (pprint-str la-history))
           ; Oh this is such a gross hack. There's all this *really* nice,
           ; sophisticated machinery for detecting various anomalies in
@@ -261,18 +252,18 @@
                 balances           (filter (comp #{:balance} :f) la-history)
                 ok-balances        (filter (comp #{:ok} :type) balances)
                 info-balances      (filter (comp #{:info} :type) balances)
-                unknown-balances   (filter (comp #{:unknown-balance} :error)
+                unresolvable-balances (filter (comp #{:unresolvable-balance} :error)
                                            info-balances)
                 ambiguous-balances (filter (comp #{:ambiguous-balance} :error)
                                            info-balances)]
 
             (assoc res
-                   :ok-balance-count        (count ok-balances)
-                   :unknown-balance-count   (count unknown-balances)
-                   :ambiguous-balance-count (count ambiguous-balances)
-                   :unknown-balances        (sample 6 unknown-balances)
-                   :ambiguous-balances      (sample 6 ambiguous-balances)
-                   :unseen-txn-ids          (unseen-txn-ids history))))))))
+                   :ok-balance-count           (count ok-balances)
+                   :unresolvable-balance-count (count unresolvable-balances)
+                   :ambiguous-balance-count    (count ambiguous-balances)
+                   :unresolvable-balances      (sample 6 unresolvable-balances)
+                   :ambiguous-balances         (sample 6 ambiguous-balances)
+                   :unseen-txn-ids             (unseen-txn-ids history))))))))
 
 (defn inexplicable-balance-checker
   "Looks for cases where we can't explain how some balance was ever read."

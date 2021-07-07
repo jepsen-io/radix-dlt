@@ -26,10 +26,8 @@
             [jepsen [store :as store]
                     [util :as util :refer [name+ pprint-str]]]
             [jepsen.checker.timeline :as timeline]
-            [jepsen.radix-dlt.checker.util :refer [known-balances
-                                                   txn-log->balance->txn-ids
+            [jepsen.radix-dlt.checker.util :refer [balance->txn-id-prefix
                                                    txn-id
-                                                   txn-logs
                                                    op-accounts]]
             [slingshot.slingshot :refer [try+ throw+]]))
 
@@ -37,34 +35,29 @@
 
 (def time-height
   "How high, in em, is a timeslice?"
-  1)
+  2)
 
 (def balance-width
   "How wide, in em, is a balance track?"
-  1)
+  2)
 
 (def balance-stylesheet
   (str ".ops { position: absolute; width: 100%; }\n"
        ".op  { position: absolute; padding: 2px; border-radius: 2px; box-shadow: 0 1px 3px rgba(0,0,0,0.12), 0 1px 2px rgba(0,0,0,0.24); overflow: hidden; z-index: 2 }\n"
        ".op.balance { background: #A5F7B7 }\n"
-       ".op.balance.unresolved { background: #F7B7A5; }\n"
+       ".op.balance.unresolvable { background: #F7B7A5; }\n"
        ".op.txn { background: #A5DEF7 }\n"
        ".op.txn.unseen { background: #D0D0D0; z-index: 1 }\n"
        ))
 
 (defn balance-index
-  "Takes a single account history, and returns a map of balances to
-  column indices"
-  [history]
-  (let [bs (known-balances history)]
-    (condp = (count bs)
-      0 {}
-      1 (->> bs first val
-             ; Balances generally fall thanks to fees, so we reverse these
-             reverse
-             (map-indexed (fn [i balance] [balance i]))
-             (into {}))
-      (throw+ {:type :extra-balances!? :balances bs}))))
+  "Takes an account analysis and returns a map of balances to column indices"
+  [account-analysis]
+  (->> (:known-balances account-analysis)
+       ; The nil balance always appears in column 0
+       (cons nil)
+       (map-indexed (fn [i balance] [balance i]))
+       (into {})))
 
 (defn partial-coords
   "Takes an invocation and a completion, and constructs a map of
@@ -88,36 +81,36 @@
     :balance-index    A map of balances to column indices
 
   and returns a sequence of boxes, one for each balance read."
-  [{:keys [balance-index txn-log history]}]
+  [{:keys [account balance-index txn-log history] :as analysis}]
   ;(pprint :txn-log)
   ;(pprint txn-log)
-  (let [balance->txn-ids (txn-log->balance->txn-ids txn-log)]
-    (->> history
-         (filter (comp #{:balance} :f))
-         history/pairs+
-         (keep (fn [[invoke complete]]
-                 (let [{:keys [account balance]} (:value complete)]
-                   (if (= :ok (:type complete))
-                     (let [txn-ids (if (nil? balance)
-                                     :init
-                                     (balance->txn-ids balance))
-                           txn-id (if (vector? txn-ids)
-                                    (peek txn-ids)
-                                    txn-ids)]
-                       [:div {:class (str "op balance"
-                                          (when (nil? txn-id)
-                                            " unresolved"))
-                              :style (timeline/style
-                                       (assoc (partial-coords invoke complete)
-                                              :left (-> balance-index
-                                                        (get balance)
-                                                        (* balance-width)
-                                                        (str "em"))))
-                              :title (str "Balance read: " balance
-                                          " from txn " (pr-str txn-id)
-                                          "\n\n"
-                                          (timeline/render-op complete))}
-                        "b " balance]))))))))
+  (->> history
+       (filter (comp #{:balance} :f))
+       history/pairs+
+       (keep (fn [[invoke complete]]
+               (let [{:keys [account balance]} (:value complete)]
+                 (if (= :ok (:type complete))
+                   (let [txn-ids (balance->txn-id-prefix
+                                   {:accounts {account analysis}}
+                                   account
+                                   balance)
+                         txn-id (if (vector? txn-ids)
+                                  (peek txn-ids)
+                                  txn-ids)]
+                     [:div {:class (str "op balance"
+                                        (when (keyword txn-id)
+                                          (str " " (name txn-id))))
+                            :style (timeline/style
+                                     (assoc (partial-coords invoke complete)
+                                            :left (-> balance-index
+                                                      (get balance)
+                                                      (* balance-width)
+                                                      (str "em"))))
+                            :title (str "Balance read: " (pr-str balance)
+                                        " from txn " (pr-str txn-id)
+                                        "\n\n"
+                                        (timeline/render-op complete))}
+                      "b " balance])))))))
 
 (defn render-txns
   "Takes a map with:
@@ -230,13 +223,12 @@
 (defn render-account!
   "Writes out an account's HTML files."
   [test analysis account]
-  (let [history  (get-in analysis [:accounts account :history])
-        txn-log  (get-in analysis [:accounts account :txn-log])
-        analysis {:test          test
-                  :account       account
-                  :history       history
-                  :txn-log       txn-log
-                  :balance-index (balance-index history)}]
+  (let [analysis (get-in analysis [:accounts account])
+        history  (:history analysis)
+        balance-index (balance-index analysis)
+        analysis (assoc analysis
+                        :test          test
+                        :balance-index balance-index)]
     (render-account-balances! analysis)
     (render-account-txn-log!  analysis)
     (render-account-timeline! analysis)))
