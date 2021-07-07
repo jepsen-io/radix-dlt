@@ -173,7 +173,7 @@
                             :txn-log {:account 1
                                       :txns [l1-0+]
                                       :by-id {0 l1-0+}
-                                      :by-balance' {999999999999999999999999999899999999999999890N l1-0+}}
+                                      :by-balance' {999999999999999999999999999899999999999999890N [l1-0+]}}
                             :txn-ids #{0}
                             :logged-txn-ids #{0}
                             :unlogged-txn-ids #{}
@@ -186,7 +186,7 @@
                             :txn-log {:account 7
                                       :txns [l7-0+]
                                       :by-id {0 l7-0+}
-                                      :by-balance' {50 l7-0+}}
+                                      :by-balance' {50 [l7-0+]}}
                             :txn-ids #{0}
                             :logged-txn-ids #{0}
                             :unlogged-txn-ids #{}
