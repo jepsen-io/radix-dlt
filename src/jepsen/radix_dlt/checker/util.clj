@@ -226,7 +226,6 @@
   2, :amount 50, :rri ...}) and returns the collection of involved accounts
   (e.g. [1 2]) or nil."
   [op]
-  (prn :op op)
   (case (:type op)
     :transfer [(:from op) (:to op)]))
 
@@ -593,7 +592,6 @@
     (cond (nil? balance)                      nil
           (= balance (init-balance account))  nil
           :else (let [txns (get-in txn-log [:by-balance' balance])]
-                  (info :account account :balance balance :txns (pr-str txns))
                   (case (count txns)
                     0 :unresolvable
                     1 (let [id (:id (first txns))

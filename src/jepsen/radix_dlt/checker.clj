@@ -308,6 +308,59 @@
          :txns      txns
          :balances  balances}))))
 
+(defn txn-diff
+  "Takes a txn1 (from a :txn op invocation) and a txn2 (from a txn log) and
+  returns a map describing their difference, if one exists."
+  [txn1 txn2]
+  (cond (nil? txn1)
+        {:type   :out-of-nowhere
+         :actual txn2}
+
+        (not= (count (:ops txn1)) (count (:actions txn2)))
+        {:type :diff-action-count
+         :expected txn1
+         :actual   txn2}
+
+        :else
+        (let [action-errs (->> (map (fn [a1 a2]
+                                      (when (or (not= (:type a1)   (:type a2))
+                                                (not= (:from a1)   (:from a2))
+                                                (not= (:to a1)     (:to a2))
+                                                (not= (:amount a1) (:amount a2))
+                                                (not= (:rri a1)    (:rri a2)))
+                                        [a1 a2]))
+                                    (:ops txn1)
+                                    (:actions txn2))
+                               (remove nil?))]
+          (when (seq action-errs)
+            {:type     :diff-actions
+             :expected txn1
+             :actual   txn2
+             :errors   (action-errs)}))))
+
+(defn faithful-checker
+  "Verifies that the representations of txns in the txn log align with the txns
+  we actually submitted."
+  []
+  (reify checker/Checker
+    (check [this test history {:keys [analysis] :as opts}]
+      (let [; Compute a map of IDs to txns we submitted
+            txn-txns (->> history
+                          (filter op/invoke?)
+                          (filter (comp #{:txn} :f))
+                          (map :value)
+                          (group-by :id)
+                          (map-vals first))
+            ; Now go through the txn logs for each account, making sure txns
+            ; are faithfully represented.
+            errs (->> (for [[account account-analysis] (:accounts analysis)
+                            txn (:txns (:txn-log account-analysis))]
+                        (when-let [id (:id txn)]
+                          (txn-diff (get txn-txns id) txn)))
+                      (remove nil?))]
+        {:valid? (empty? errs)
+         :errors errs}))))
+
 (defn balance-vis-checker
   "Renders balances, transaction logs, etc for each account"
   []
@@ -352,6 +405,7 @@
   []
   (let [composed (checker/compose
                    {:stats        (stats)
+                    :faithful     (faithful-checker)
                     :negative     (negative-checker)
                     :inexplicable (inexplicable-balance-checker)
                     :list-append  (list-append-checker)
