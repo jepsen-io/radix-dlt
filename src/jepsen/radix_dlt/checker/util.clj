@@ -61,7 +61,11 @@
 
 (t/defalias OpAction
   "The representation of a transaction action in a :txn operation."
-  (t/HVec [ActionType Account Account Balance]))
+  (t/HMap :mandatory {:type ActionType
+                      :from Account
+                      :to Account
+                      :amount Balance
+                      :rri String}))
 
 (t/defalias OpTxn
   "The representation of a transaction in a :txn operation."
@@ -188,26 +192,6 @@
     (when rri
       (re-find #"^xrd_" rri))))
 
-(t/ann ^:no-check mop-accounts [OpAction -> (t/Option (t/Seq Account))])
-(defn mop-accounts
-  "Takes a micro-op in a Radix transaction (e.g. [:transfer 1 2 50]) and
-  returns the collection of involved accounts (e.g. [1 2]) or nil."
-  [op]
-  (case (first op)
-    ; Checker thinks op's elements are a union of all types; can't see this is
-    ; [Account Account].
-    :transfer (subvec op 1 3)))
-
-(t/ann txn-op-accounts [TxnOp -> (t/Set Account)])
-(defn txn-op-accounts
-  "A sorted set of all accounts involved in a Radix :txn op"
-  [op]
-  (->> (:value op)
-       :ops
-       (mapcat mop-accounts)
-       (cons (:from (:value op)))
-       (into (sorted-set))))
-
 (t/ann add-pair-index
        [(t/HMap :mandatory {:history History}) ->
         (t/HMap :mandatory {:history    History
@@ -235,6 +219,27 @@
                  (assoc txn-index (:id (:value op)) op))
                {})
        (assoc analysis :txn-index)))
+
+(t/ann ^:no-check mop-accounts [OpAction -> (t/Option (t/Seq Account))])
+(defn mop-accounts
+  "Takes a micro-op in a Radix transaction (e.g. {:type :transfer, :from 1, :to
+  2, :amount 50, :rri ...}) and returns the collection of involved accounts
+  (e.g. [1 2]) or nil."
+  [op]
+  (prn :op op)
+  (case (:type op)
+    :transfer [(:from op) (:to op)]))
+
+
+(t/ann txn-op-accounts [TxnOp -> (t/Set Account)])
+(defn txn-op-accounts
+  "A sorted set of all accounts involved in a Radix :txn op"
+  [op]
+  (->> (:value op)
+       :ops
+       (mapcat mop-accounts)
+       (cons (:from (:value op)))
+       (into (sorted-set))))
 
 (t/ann op-accounts [RadixOp -> (t/Set Account)])
 (defn op-accounts
@@ -266,13 +271,7 @@
   {:id      id
    :fee     u/fee
    :message (str "t" id)
-   :actions (mapv (fn [[type from to amount]]
-                    {:type type
-                     :rri  "xrd_jepsen"
-                     :from from
-                     :to   to
-                     :amount amount})
-                  ops)})
+   :actions ops})
 
 (defn longest-txn-logs
   "Takes a Radix history and finds a map of account IDs to the longest possible
@@ -391,31 +390,6 @@
                        add-balances-to-txn-log
                        add-id-index-to-txn-log
                        add-balance'-index-to-txn-log)))))
-
-(defn unseen-txn-ids
-  "Takes a Radix history and computes a map of accounts to collections of
-  unseen transaction IDs---those which did not appear in the longest txn
-  history."
-  [history]
-  (let [seen (->> (longest-txn-logs history)
-                  (map-vals (comp set :id :txns)))]
-    ; Find all the txns that *could* have taken effect
-    (->> history
-         (filter (comp #{:txn} :f))
-         (filter (comp #{:ok :info} :type))
-         ; Take these transactions and build a map of accounts to possible txn
-         ; ids, only if they're not in the longest sets.
-         (reduce (fn [m op]
-                   (let [id (:id (:value op))]
-                     (reduce (fn [m acct]
-                               (let [seen (get seen acct (sorted-set))]
-                                 (if (seen id)
-                                   m
-                                   ; Aha, an unseen txn!
-                                   (assoc m acct (conj (get m acct []) id)))))
-                             m
-                             (txn-op-accounts op))))
-                 {}))))
 
 (defn account-history
   "Restricts a history to a single account, and assigns each operation a

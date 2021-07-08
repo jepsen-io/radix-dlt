@@ -78,8 +78,8 @@
              (analysis- history)))))
 
   (testing "unlogged txn"
-    (let [t1  {:index 0, :type :invoke, :process 0, :f :txn, :value {:id 0, :from 1, :ops [[:transfer 1 10 50]]}}
-          t1' {:index 1, :type :info,   :process 0, :f :txn, :value {:id 0, :from 1, :ops [[:transfer 1 10 50]]}}
+    (let [t1  {:index 0, :type :invoke, :process 0, :f :txn, :value {:id 0, :from 1, :ops [{:type :transfer :from 1 :to 10 :amount 50 :rri xrd}]}}
+          t1' {:index 1, :type :info,   :process 0, :f :txn, :value {:id 0, :from 1, :ops [{:type :transfer :from 1 :to 10 :amount 50 :rri xrd}]}}
           history [t1 t1']]
       (is (= {:txn-index {0 t1'}
               :accounts {1 {:account 1
@@ -105,8 +105,8 @@
           b10  {:index 0, :type :invoke, :process 1, :f :balance, :value {:account 10}}
           b10' {:index 1, :type :ok,     :process 1, :f :balance, :value {:account 10, :balance 50}}
           ; Transaction adds 50 to 10
-          t1  {:index 2, :type :invoke, :process 0, :f :txn, :value {:id 0, :from 1, :ops [[:transfer 1 10 50]]}}
-          t1' {:index 3, :type :info,   :process 0, :f :txn, :value {:id 0, :from 1, :ops [[:transfer 1 10 50]]}}
+          t1  {:index 2, :type :invoke, :process 0, :f :txn, :value {:id 0, :from 1, :ops [{:type :transfer :from 1 :to 10 :amount 50 :rri xrd}]}}
+          t1' {:index 3, :type :info,   :process 0, :f :txn, :value {:id 0, :from 1, :ops [{:type :transfer :from 1 :to 10 :amount 50 :rri xrd}]}}
           ; Now that same read is explicable
           b10-2  {:index 4, :type :invoke, :process 1, :f :balance, :value {:account 10}}
           b10-2' {:index 5, :type :ok,     :process 1, :f :balance, :value {:account 10, :balance 50}}
@@ -158,10 +158,10 @@
                        :id 0
                        :balance 0N
                        :balance' 50)
-          t1  {:index 0, :type :invoke, :process 0, :f :txn, :value {:id 0, :from 1, :ops [[:transfer 1 7 50]
-                                                                                           [:transfer 1 8 60]]}}
-          t1' {:index 1, :type :info,   :process 0, :f :txn, :value {:id 0, :from 1, :ops [[:transfer 1 7 50]
-                                                                                           [:transfer 1 8 60]]}}
+          t1  {:index 0, :type :invoke, :process 0, :f :txn, :value {:id 0, :from 1, :ops [{:type :transfer :from 1 :to 7 :amount 50 :rri xrd}
+                                                                                           {:type :transfer :from 1 :to 8 :amount 60 :rri xrd}]}}
+          t1' {:index 1, :type :info,   :process 0, :f :txn, :value {:id 0, :from 1, :ops [{:type :transfer :from 1 :to 7 :amount 50 :rri xrd}
+                                                                                           {:type :transfer :from 1 :to 8 :amount 60 :rri xrd}]}}
           l1  {:index 2, :type :invoke, :process 1, :f :txn-log, :value {:account 1}}
           l1' {:index 3, :type :ok,     :process 1, :f :txn-log, :value {:account 1, :txns [l1-0]}}
           l7  {:index 4, :type :invoke, :process 2, :f :txn-log, :value {:account 7}}

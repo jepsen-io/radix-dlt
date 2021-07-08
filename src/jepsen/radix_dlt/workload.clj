@@ -116,14 +116,14 @@
       (case f
         :txn
         (let [; Map account IDs to addresses and add the token RRI to each op.
-              ops (map (fn [op]
-                         (case (first op)
-                           :transfer (let [[f id1 id2 amount] op]
-                                       [f
-                                        (id->address @accounts id1)
-                                        (id->address @accounts id2)
+              ops (map (fn [{:keys [type] :as op}]
+                         (case type
+                           :transfer (let [{:keys [from to amount rri]} op]
+                                       [type
+                                        (id->address @accounts from)
+                                        (id->address @accounts to)
                                         amount
-                                        @token-rri])))
+                                        rri])))
                        (:ops value))
               ;_ (info :ops ops)
               ; Execute transaction
@@ -176,9 +176,9 @@
   (close! [this test]))
 
 (defn client
-  "Constructs a fresh Jepsen client. Takes an accounts atom."
-  [accounts]
-  (Client. nil nil accounts (promise)))
+  "Constructs a fresh Jepsen client. Takes an accounts atom and an rri promise"
+  [accounts token-rri]
+  (Client. nil nil accounts token-rri))
 
 ;; Generator
 
@@ -267,18 +267,21 @@
         ; Construct ops
         ops (->> (range n)
                  (mapv (fn [_]
-                         [:transfer from (gen-rand-key gen)
-                          (if (u/default-account-id? from)
-                            ; If this is the first write, give them a bunch to
-                            ; play with; otherwise almost every transfer will
-                            ; fail.
-                            (-> 100 rand-int inc (* u/fee 10))
+                         {:type   :transfer
+                          :from   from
+                          :to     (gen-rand-key gen)
+                          :amount (if (u/default-account-id? from)
+                                    ; If this is the first write, give them a
+                                    ; bunch to play with; otherwise almost
+                                    ; every transfer will fail.
+                                    (-> 100 rand-int inc (* u/fee 10))
 
-                            ; For transfers between normal accounts, pick
-                            ; 1-100x fee
-                            (-> 100 rand-int inc (* u/fee)))])))
+                                    ; For transfers between normal accounts,
+                                    ; pick 1-100x fee
+                                    (-> 100 rand-int inc (* u/fee)))
+                          :rri    @(:token-rri gen)})))
         ; What accounts are we touching?
-        tos   (->> ops (map #(nth % 2)) set)
+        tos   (set (map :to ops))
         ; Don't bother with default accounts; they're excluded from write
         ; counting
         accts (->> (conj tos from)
@@ -301,6 +304,7 @@
    max-writes-per-key
    max-txn-size
    accounts     ; An atom to an accounts structure
+   token-rri    ; A promise of an RRI for the token we'll transfer
    key-pool     ; A vector of active keys; always of size key-count
    write-counts ; A map of keys to the number of times they've been written.
    funded?      ; A map of keys to whether we think they currently contain XRD.
@@ -316,7 +320,7 @@
         :txn
         (case (:type event)
           ; Record receiving accounts as being funded
-          :ok (let [funded?' (reduce (fn [funded? [f from to amount]]
+          :ok (let [funded?' (reduce (fn [funded? {:keys [to]}]
                                        (assoc funded? to true))
                                      funded?
                                      (:ops value))]
@@ -325,7 +329,7 @@
           ; When a transaction fails, decrement its write count; we can give it
           ; another shot.
           :fail (let [wc' (->> (:ops value)
-                               (map #(nth % 2))
+                               (map :to)
                                (cons (:from value))
                                set
                                (reduce (fn [wc k]
@@ -341,24 +345,33 @@
         this)))
 
   (op [this test context]
-    (let [f       (rand-nth [:txn :txn-log :balance])
-          [op _]  (gen/op {:type :invoke, :f f} test context)]
+    ; Generate a generic invocation
+    (let [op (gen/fill-in-op {} context)]
       (if (= :pending op)
         ; Every process is busy right now
         [:pending this]
 
-        (case f
-          :txn (let [[transfer gen'] (gen-transfer! this)]
-                 [(assoc op :value transfer)
-                  gen'])
+        ; Right, what thread is this?
+        (let [t (->> op :process (gen/process->thread context))
+              ; How far into the concurrency of the test is that?
+              zone (/ t (count (:workers context)))
+              ; Pick a f based on the zone: first third do txns.
+              f (if (< zone 1/3)
+                  :txn
+                  (rand-nth [:txn-log :balance]))
+              op (assoc op :f f)]
+          (case f
+            :txn (let [[transfer gen'] (gen-transfer! this)]
+                   [(assoc op :value transfer)
+                    gen'])
 
-          ; For transaction logs and balances, we either select a key from the
-          ; pool, or our default account 1.
-          :txn-log [(assoc op :value {:account (gen-rand-read-key this)})
-                    this]
+            ; For transaction logs and balances, we either select a key from the
+            ; pool, or our default account 1.
+            :txn-log [(assoc op :value {:account (gen-rand-read-key this)})
+                      this]
 
-          :balance [(assoc op :value {:account (gen-rand-read-key this)})
-                    this])))))
+            :balance [(assoc op :value {:account (gen-rand-read-key this)})
+                      this]))))))
 
 (defn generator!
   "Constructs a Generator out of an options map. Options are:
@@ -435,6 +448,7 @@
     ; And build generator
     (map->Generator
       {:accounts           (:accounts opts)
+       :token-rri          (:token-rri opts)
        :key-dist           key-dist
        :key-dist-base      (:key-dist-base opts 2)
        :key-count          key-count
@@ -449,10 +463,13 @@
 (defn workload
   "Constructs a package of a client and generator."
   [opts]
-  (let [accounts (atom (initial-accounts))]
-    {:client          (client accounts)
+  (let [accounts  (atom (initial-accounts))
+        token-rri (promise)]
+    {:client          (client accounts token-rri)
      :checker         (rchecker/checker)
-     :generator       (generator! (assoc opts :accounts accounts))
+     :generator       (generator! (assoc opts
+                                         :accounts accounts
+                                         :token-rri token-rri))
      :final-generator (gen/each-thread
                         (delay
                           (->> @accounts

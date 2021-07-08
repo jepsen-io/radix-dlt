@@ -21,12 +21,13 @@
             :pure-generators  true
             :client           (:client workload)
             :checker          (checker/compose
-                                {:workload (:checker workload)
+                                {:stats    (checker/stats)
+                                 :workload (:checker workload)
                                  :perf     (checker/perf)
-                                 :stats    (checker/stats)
                                  :ex       (checker/unhandled-exceptions)})
             :generator        (gen/phases
                                 (->> (:generator workload)
+                                     (gen/stagger (/ (:rate opts)))
                                      (gen/nemesis nil)
                                      (gen/time-limit (:time-limit opts)))
                                 (gen/log (str "Waiting "
@@ -41,12 +42,7 @@
 
 (def cli-opts
   "Command line option specifications."
-  [[nil "--balance-rate HZ" "Target number of balance reads per second."
-    :default 1
-    :parse-fn read-string
-    :validate validate-non-neg]
-
-   [nil "--node-runner-version VERSION-STRING" "Which version of https://github.com/radixdlt/node-runner/releases should we use to install Radix?"
+  [[nil "--node-runner-version VERSION-STRING" "Which version of https://github.com/radixdlt/node-runner/releases should we use to install Radix?"
     :default "1.0-beta.35.1"]
 
    [nil "--radix-git-version COMMIT" "What commit from radix-dlt should we check out?"
@@ -55,13 +51,8 @@
    [nil "--recovery-time SECONDS" "How long should we wait for cluster recovery before final reads?"
     :default 10]
 
-   [nil "--txn-rate HZ" "Target number of transactions per second"
-    :default 1
-    :parse-fn read-string
-    :validate validate-non-neg]
-
-   [nil "--txn-log-rate HZ" "Target number of reads of the txn log per second"
-    :default  1
+   [nil "--rate HZ" "Target number of ops/sec"
+    :default  100
     :parse-fn read-string
     :validate validate-non-neg]
 

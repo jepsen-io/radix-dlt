@@ -14,8 +14,7 @@
                                                    balance->txn-id-prefix
                                                    init-balance
                                                    txn-id
-                                                   txn-op-accounts
-                                                   unseen-txn-ids]]
+                                                   txn-op-accounts]]
             [jepsen.tests.cycle.append :as append]
             [knossos [op :as op]]))
 
@@ -262,8 +261,7 @@
                    :unresolvable-balance-count (count unresolvable-balances)
                    :ambiguous-balance-count    (count ambiguous-balances)
                    :unresolvable-balances      (sample 6 unresolvable-balances)
-                   :ambiguous-balances         (sample 6 ambiguous-balances)
-                   :unseen-txn-ids             (unseen-txn-ids history))))))))
+                   :ambiguous-balances         (sample 6 ambiguous-balances))))))))
 
 (defn inexplicable-balance-checker
   "Looks for cases where we can't explain how some balance was ever read."
@@ -319,32 +317,46 @@
         (balance-vis/render-account! test analysis account))
       {:valid? true})))
 
-(defn error-types
-  "A small checker which sums up the different kinds of errors we encounter"
+(defn stats
+  "Basic statistics"
   []
   (reify checker/Checker
-    (check [this test history opts]
-      (->> history
-           (keep :error)
-           (group-by (fn [e]
-                       ; Some errors are bare keywords, others are [:something,
-                       ; details]
-                       (if (keyword? e)
-                         e
-                         (first e))))
-           (map-vals count)
-           (merge {:valid? true})))))
+    (check [this test history {:keys [analysis] :as opts}]
+      (let [errs (->> history
+                      (keep :error)
+                      (map (fn [e] (if (keyword? e) e (first e))))
+                      frequencies)
+            accounts (->> analysis :accounts vals)
+            possible-txn-count (->> accounts (mapcat :txn-ids) set count)
+            logged-txn-count   (->> accounts (mapcat :logged-txn-ids) set count)
+            unlogged-txn-count (->> accounts (mapcat :unlogged-txn-ids) set
+                                    count)
+            balance-count (->> history
+                               (filter (comp #{:balance} :f))
+                               (filter op/ok?)
+                               count)
+            inexplicable-balance-count (->> accounts
+                                            (map (comp count
+                                                       :inexplicable-balances))
+                                            (reduce + 0))]
+           {:valid?                     true
+            :errors                     errs
+            :possible-txn-count         possible-txn-count
+            :logged-txn-count           logged-txn-count
+            :unlogged-txn-count         unlogged-txn-count
+            :balance-count              balance-count
+            :inexplicable-balance-count inexplicable-balance-count}))))
 
 (defn checker
   "Unified checker."
   []
   (let [composed (checker/compose
-                   {:timeline     (timeline/html)
-                    :errors       (error-types)
-                    :inexplicable (inexplicable-balance-checker)
+                   {:stats        (stats)
                     :negative     (negative-checker)
+                    :inexplicable (inexplicable-balance-checker)
                     :list-append  (list-append-checker)
-                    :balance-vis  (balance-vis-checker)})]
+                    :balance-vis  (balance-vis-checker)
+                    :timeline     (timeline/html)})]
     ; We want to compute the analysis just once, and let every checker use it
     ; independently.
     (reify checker/Checker

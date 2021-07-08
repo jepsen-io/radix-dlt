@@ -14,7 +14,7 @@
   [{:keys [f value]}]
   (case f
     :txn     (->> (:ops value)
-                  (mapcat (fn [[_ from to]] [from to])))
+                  (mapcat (juxt :from :to)))
     :txn-log [(:account value)]
     :balance [(:account value)]))
 
@@ -28,13 +28,26 @@
   (let [n                  10000
         max-writes-per-key 10
         accounts (atom (w/initial-accounts))
+        rri      (doto (promise) (deliver "xrd_jepsen"))
         gen      (->> (w/generator! {:accounts           accounts
+                                     :token-rri          rri
                                      :max-writes-per-key max-writes-per-key
                                      :key-count          10
                                      :key-dist-base      2})
+                      (gen/clients)
+                      (gen/delay 1)
                       (gen/limit n))
-        ops      (gt/quick gen)
+        ; We're slicing the txn/txn-log/balance space into roughly thirds, so
+        ; we want 3 workers
+        ctx      (gt/n+nemesis-context 3)
+        ops      (gt/quick ctx gen)
         ops-by-f (group-by :f ops)]
+
+    (testing "process dispersion"
+      (->> ops
+           (map :process)
+           frequencies
+           pprint))
 
     (testing "fs"
       (is (= #{:txn :balance :txn-log} (set (keys ops-by-f)))))
