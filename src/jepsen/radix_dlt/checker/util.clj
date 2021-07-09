@@ -400,6 +400,11 @@
        (map-indexed (fn sub-index [i op] (assoc op :sub-index i)))
        vec))
 
+(def inexplicable-balance-max-unlogged
+  "How many unlogged deltas do we allow an inexplicable-balance set to track
+  before giving up? Each delta doubles the search space!"
+  8)
+
 (defn inexplicable-balances
   "Takes an account analysis, and finds all balance reads in that account's
   history which can't be explained by the transaction log, plus unlogged txns
@@ -418,10 +423,24 @@
            unlogged-deltas   #{0}
            ; A vector of inexplicable balance reads.
            inexplicable       []]
-      (if-not history
-        ; Done!
-        inexplicable
+      (cond
+        ; Done
+        (nil? history) inexplicable
+
+        ; Too many unlogged deltas; search space is blowing up!
+        (< inexplicable-balance-max-unlogged (count unlogged-deltas))
+        (let [h (:history account-analysis) ; Original history
+              n (count h)
+              i (- n (count history))]
+          (warn "Giving up on inexplicable-balance check of account" account
+                " at " i "/" n "operations into the history:"
+                (into (sorted-set) unlogged-deltas)
+                " has exceeded " inexplicable-balance-max-unlogged
+                "unlogged deltas")
+          inexplicable)
+
         ; Right, now consider the next operation
+        :else
         (let [{:keys [type f value] :as op} (first history)]
           ; (info :op op)
           (case f
@@ -517,37 +536,38 @@
   [analysis]
   (let [history  (:history analysis)
         txn-logs (txn-logs history)]
-    (reduce (fn [analysis account]
-              (let [history (account-history account (:history analysis))
-                    pair-index (history/pair-index+ history)
-                    txn-log (get txn-logs account)
-                    txn-ids (->> history
-                                 (filter (comp #{:txn} :f))
-                                 (filter (comp #{:ok :info} :type))
-                                 (map (comp :id :value))
-                                 (into (sorted-set)))
-                    logged-txn-ids   (->> txn-log :by-id keys
-                                          (into (sorted-set)))
-                    unlogged-txn-ids (set/difference txn-ids logged-txn-ids)
-                    ; Build a partial account analysis
-                    account-analysis {:account          account
-                                      :history          history
-                                      :pair-index       pair-index
-                                      :txn-log          txn-log
-                                      :txn-ids          txn-ids
-                                      :logged-txn-ids   logged-txn-ids
-                                      :unlogged-txn-ids unlogged-txn-ids}
-                    ; And go on to compute inexplicable balances
-                    account-analysis (-> account-analysis
-                                         (assoc :inexplicable-balances
-                                                (inexplicable-balances
-                                                  account-analysis))
-                                         (assoc :known-balances
-                                                (known-balances
-                                                  account-analysis)))]
-                (assoc-in analysis [:accounts account] account-analysis)))
-            analysis
-            (all-accounts history))))
+    (->> (all-accounts history)
+         (pmap (fn [account]
+                 (let [history (account-history account history)
+                       pair-index (history/pair-index+ history)
+                       txn-log (get txn-logs account)
+                       txn-ids (->> history
+                                    (filter (comp #{:txn} :f))
+                                    (filter (comp #{:ok :info} :type))
+                                    (map (comp :id :value))
+                                    (into (sorted-set)))
+                       logged-txn-ids   (->> txn-log :by-id keys
+                                             (into (sorted-set)))
+                       unlogged-txn-ids (set/difference txn-ids logged-txn-ids)
+                       ; Build a partial account analysis
+                       account-analysis {:account          account
+                                         :history          history
+                                         :pair-index       pair-index
+                                         :txn-log          txn-log
+                                         :txn-ids          txn-ids
+                                         :logged-txn-ids   logged-txn-ids
+                                         :unlogged-txn-ids unlogged-txn-ids}
+                       ; And go on to compute inexplicable balances
+                       account-analysis (-> account-analysis
+                                            (assoc :inexplicable-balances
+                                                   (inexplicable-balances
+                                                     account-analysis))
+                                            (assoc :known-balances
+                                                   (known-balances
+                                                     account-analysis)))]
+                   [account account-analysis])))
+         (into {})
+         (assoc analysis :accounts))))
 
 (defn analysis
   "Computes an *analysis* of a history: a complex map with lots of intermediate
