@@ -395,6 +395,7 @@
   sequential :sub-index."
   [account history]
   (->> history
+       (filter (comp integer? :process))
        (filter (fn of-interest? [op] (contains? (op-accounts op) account)))
        (map-indexed (fn sub-index [i op] (assoc op :sub-index i)))
        vec))
@@ -407,7 +408,9 @@
   (let [{:keys [account history txn-log pair-index logged-txn-ids]}
         account-analysis]
     ; (info :checking-account account)
-    (loop [history            (seq history)
+    (loop [history            (->> history
+                                   (filter (comp integer? :process))
+                                   seq)
            ; A set of balances we think are possible at this point in time
            balances           #{(init-balance account)}
            ; A collection of offsets (from unlogged transactions) that could be

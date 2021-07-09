@@ -94,6 +94,8 @@
          (catch [:type :radix-dlt/failure, :code 1500] e#
            (assoc ~op :type :fail, :error [:substate-not-found
                                            (:message e#)]))
+         (catch [:type :radix-dlt/failure, :code 1604] e#
+           (assoc ~op :type :fail, :error :parse-error))
          (catch [:type :radix-dlt/failure, :code 2515] e#
            (assoc ~op :type :fail, :error :insufficient-balance))))
 

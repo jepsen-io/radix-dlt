@@ -399,4 +399,11 @@ export RADIXDLT_STAKER_1_PRIVKEY=p7vk1dMv5A0agIbcgB6TWdhKnyunAJTFW9bK6ZiSCHg=
       (kill! [this test node]
         (c/su
           ; The script immediately execs, so pidfile is actually useless here
-          (cu/stop-daemon! "java" pid-file))))))
+          (cu/stop-daemon! "java" pid-file)))
+
+      db/Pause
+      (pause! [this test node]
+        (cu/grepkill! :STOP "java"))
+
+      (resume! [this test node]
+        (cu/grepkill! :CONT "java")))))

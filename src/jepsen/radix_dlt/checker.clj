@@ -79,7 +79,7 @@
                          :value   [[:r account nil]])
 
                   (assoc op :type :ok, :value [[:r account ids]]))))))
-        history))
+        (filter (comp integer? :process) history)))
 
 (defn write?
   "Is this a write operation?"
