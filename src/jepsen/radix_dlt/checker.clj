@@ -366,8 +366,11 @@
   []
   (reify checker/Checker
     (check [this test history {:keys [analysis] :as opts}]
-      (doseq [account (keys (:accounts analysis))]
-        (balance-vis/render-account! test analysis account))
+      (->> (:accounts analysis)
+           keys
+           (pmap (fn [account]
+                   (balance-vis/render-account! test analysis account)))
+           dorun)
       {:valid? true})))
 
 (defn stats

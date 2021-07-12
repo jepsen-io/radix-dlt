@@ -396,7 +396,18 @@
   [account history]
   (->> history
        (filter (comp integer? :process))
-       (filter (fn of-interest? [op] (contains? (op-accounts op) account)))
+       (filter (fn of-interest? [op]
+                 ; The simple variant of this is
+                 ; (contains? (op-accounts op) account)
+                 ; But this is a significant hotspot, so we do something a
+                 ; little faster
+                 (let [f     (:f op)
+                       value (:value op)]
+                   (case f
+                     :balance (= account (:account value))
+                     :txn-log (= account (:account value))
+                     :txn     (or (= account (:from value))
+                                  (some #{account} (map :to (:ops value))))))))
        (map-indexed (fn sub-index [i op] (assoc op :sub-index i)))
        vec))
 
