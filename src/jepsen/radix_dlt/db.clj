@@ -275,7 +275,56 @@ export RADIXDLT_STAKER_1_PRIVKEY=p7vk1dMv5A0agIbcgB6TWdhKnyunAJTFW9bK6ZiSCHg=
            :client_api.enable          true
            :client_api.port            client-api-port
            :log.level                  "debug"
-           :universe                   (:universe-str universe)}
+           :universe                   (:universe-str universe)
+
+           ; Timeout tuning. Our goal is to reduce the time it takes for
+           ; initial cluster convergence, and to speed recovery from faults.
+           ; See radixdlt-core/radixdlt/src/main/resources/default.config for
+           ; documentation. I'm using grep -r RuntimeProperties radixdlt-core/
+           ; to find property names and defaults.
+
+           ; Time to wait for a connection to a discovery oracle to complete
+           ; before abandoning the attempt, in milliseconds
+           :network.discovery.connection.timeout 5000 ; default 60k
+           ; Time to wait for data to be returned from a discovery oracle
+           ; before abandoning the connection, in milliseconds.
+           :network.discovery.read.timeout 5000 ; default 60k
+
+           ; Time between querying a random known host for its peer list, in
+           ; milliseconds. Every specified time period, a random peer is
+           ; queried for the peers that it knows of in order to keep the list
+           ; of peers synchronised between nodes.
+           :network.peers.broadcast.interval 3000 ; default 30k
+           ; Time to wait on system start before attempting to query for peers
+           ; lists from known hosts, in milliseconds.
+           :network.peers.broadcast.delay 6000 ; default 60k
+
+           ; Time between selecting a number of random peers and attempting to
+           ; ping/pong them for liveness, in milliseconds.
+           :network.peers.probe.interval 1000 ; default 1000
+           ; Time to wait on system start before attempting to ping/pong known
+           ; peers to check liveness, in milliseconds.
+           :network.peers.probe.delay 0 ; default 0
+           ; Time to consider a peer unresponsive after an unacknowledged ping,
+           ; in milliseconds.
+           :network.peers.probe.timeout 2000 ; default 20k
+           ; Individual nodes will not be ping/ponged more frequently than this
+           ; duration, in milliseconds
+           :network.peers.probe.frequency 3000 ; default 30k
+
+           ; Time to wait on between (sic) sending heartbeat messages to all
+           ; known peers, in milliseconds.
+           :network.peers.heartbeat.interval 1000 ; default 10k
+           ; Time to wait on system start before attempting to heartbeat known
+           ; peers to check liveness, in milliseconds.
+           :network.peers.heartbeat.delay 1000 ; default 10k
+
+           ; Time to wait on between querying discovery nodes, in milliseconds.
+           :network.peers.discover.interval 1000 ; default 10k
+           ; Time to wait on system start before attempting to query discovery
+           ; nodes, in milliseconds.
+           :network.peers.discover.delay 1000 ; default 1k
+           }
     ; All non-primary nodes get the primary as their seed
     (not= node (primary test))
     (assoc :network.seeds (str (cn/ip (first (:nodes test)))
