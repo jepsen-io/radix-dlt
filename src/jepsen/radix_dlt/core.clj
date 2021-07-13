@@ -40,8 +40,9 @@
                      :nodes     (:nodes opts)
                      :faults    (:nemesis opts)
                      :partition {:targets [:one
-                                           :majority
-                                           :majorities-ring]}
+                                           ;:majority
+                                           :majorities-ring
+                                           ]}
                      :pause {:targets [:one :majority]}
                      :kill {:targets [:one :majority]}
                      :interval (:nemesis-interval opts)})]
