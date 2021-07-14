@@ -113,7 +113,7 @@
       (when-not (realized? token-rri)
         (deliver token-rri (:rri (rc/native-token conn))))))
 
-  (invoke! [this test {:keys [:f :value] :as op}]
+  (invoke! [this test {:keys [f value] :as op}]
     (with-errors op
       (case f
         :txn
@@ -134,13 +134,22 @@
                             (str "t" (:id value))
                             ops)
               ; No matter what, we at least know our transaction ID
-              value' (assoc value :tx-id (:id txn'))
-              ; Await execution
-              status (-> txn' :status deref :status)]
-          (assoc op :type (case status
-                            :confirmed  :ok
-                            :pending    :info
-                            :failed     :fail)))
+              op'    (update op :value assoc :txn-id (:id txn'))]
+
+          ; Await execution. We wrap this with *another* with-errors: if it
+          ; crashes, at least we know the tx-id and can ask about it later.
+          (with-errors op'
+            (let [status (-> txn' :status deref :status)]
+              (assoc op' :type (case status
+                                 :confirmed  :ok
+                                 :pending    :info
+                                 :failed     :fail)))))
+
+        :check-txn
+        (let [status (:status (rc/txn-status conn (:txn-id value)))]
+          (assoc op
+                 :type :ok
+                 :value (assoc value :status status)))
 
         :txn-log
         (let [; A little helper: we want to translate addresses into numeric IDs
@@ -462,6 +471,51 @@
        :next-key           (inc (peek key-pool))
        :next-txn-id        0})))
 
+(defrecord CheckTxnGenerator [gen txns]
+  gen/Generator
+  (update [this test context {:keys [f type value] :as event}]
+    (when (< (rand) 1/10)
+      (info :check-txn-queue (count txns) (seq txns)))
+    (if (or (and (= :txn f)
+                 (= :info type)
+                 (:txn-id value)) ; We can't always get a txn-id here
+            (and (= :check-txn f)
+                 (or (= :fail type)
+                     (= :info type)
+                     (= :pending (:status value)))))
+      (do ; Transaction crashed, or our attempt to check it failed, or it's
+          ; still pending. Add it to our queue.
+          (info :adding :txn-id (:txn-id value) :value value)
+          (CheckTxnGenerator. (gen/update gen test context event)
+                              (conj txns (:txn-id value))))
+
+      ; Pass through
+      (CheckTxnGenerator. (gen/update gen test context event) txns)))
+
+  (op [this test context]
+    ; Get an op from the underlying generator
+    (let [[op gen'] (gen/op gen test context)
+          ; And a txn-id we might want to check on
+          txn-id    (peek txns)]
+      (info :txn-id txn-id :f (:f op))
+      (if (and txn-id
+               (< (rand) 1/2) ; Only rewrite some requests.
+               (#{:txn-log :balance} (:f op)))
+        ; We've got a txn-id we haven't checked on, and this would have been a
+        ; read. Rewrite it to a txn-check op.
+        [(assoc op :f :check-txn, :value {:txn-id txn-id})
+         (CheckTxnGenerator. gen' (pop txns))]
+
+        ; Just pass through
+        [op (CheckTxnGenerator. gen' txns)]))))
+
+(defn check-txn-generator
+  "Wraps a Generator in one which detects crashed :txn operations and, every so
+  often, issues a :check-txn request which attempts to determine whether the
+  txn actually happened or not."
+  [gen]
+  (CheckTxnGenerator. gen clojure.lang.PersistentQueue/EMPTY))
+
 (defn workload
   "Constructs a package of a client and generator."
   [opts]
@@ -469,13 +523,14 @@
         token-rri (promise)]
     {:client          (client accounts token-rri)
      :checker         (rchecker/checker)
-     :generator       (generator! (assoc opts
-                                         :accounts accounts
-                                         :token-rri token-rri))
-     :final-generator (gen/each-thread
-                        (delay
-                          (->> @accounts
-                               :accounts
-                               (map :id)
-                               (map (fn [acct]
-                                      {:f :txn-log, :value {:account acct}})))))}))
+     :generator       (->> (assoc opts
+                                  :accounts accounts
+                                  :token-rri token-rri)
+                           generator!
+                           check-txn-generator)
+     :final-generator (delay
+                        (->> @accounts
+                             :accounts
+                             (map :id)
+                             (map (fn [acct]
+                                    {:f :txn-log, :value {:account acct}}))))}))

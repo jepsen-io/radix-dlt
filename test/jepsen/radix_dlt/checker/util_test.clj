@@ -206,6 +206,18 @@
                             :known-balances #{0}
                             :inexplicable-balances []}}}
              (analysis- history)))))
-
-
   )
+
+(deftest rewrite-info-txns-test
+  (testing "empty"
+    (is (= []
+           (rewrite-info-txns []))))
+
+  (testing "basic"
+    (is (= [{:process 0, :type :invoke, :f :txn, :value {}}
+            {:process 0, :type :ok, :f :txn, :value {:txn-id :x}}]
+           (rewrite-info-txns
+             [{:process 0, :type :invoke, :f :txn, :value {}}
+              {:process 0, :type :info, :f :txn, :value {:txn-id :x}}
+              {:process 1, :type :invoke, :f :check-txn, :value {:txn-id :x}}
+              {:process 1, :type :ok, :f :check-txn, :value {:txn-id :x, :status :confirmed}}])))))

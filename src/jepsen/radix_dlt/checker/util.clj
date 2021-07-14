@@ -639,4 +639,75 @@
                         ids)
                     :ambiguous)))))
 
+
+(defn rewrite-info-txns
+  "Takes a Radix-DLT history, and rewrites crashed (:info) :txn operations when
+  a later :check-txn operation has determined their status. Specifically, the
+  :txn :info operation is deleted from the history and is replaced by the
+  completion of the txn-check operation, as if the txn-check completion were
+  the completion of the original :txn operation. All txn-check operations are
+  removed from the history."
+  [history]
+  ; First, build an set of txn-ids which we know will later be observed by a
+  ; check-txn operation. We use this to look ahead and figure out whether we
+  ; can skip the :info operation for a :txn.
+  (let [checked (->> history
+                     (filter (comp #{:check-txn} :f))
+                     (filter op/ok?)
+                     ; Specifically, we need to know that the operation was
+                     ; confirmed or failed; pending tells us nothing.
+                     (map :value)
+                     (filter (comp #{:confirmed :failed} :status))
+                     (map :txn-id)
+                     set)]
+    ;(info :checked checked)
+    (loop [history   (seq history)  ; Remaining ops
+           history'  []             ; Resulting history
+           txn's     {}]            ; Map of txn-id to :txn completion op
+      ;(info :op (first history) :txn's txn's)
+      (if-not history
+        ; Done
+        history'
+        (let [{:keys [f type value] :as op} (first history)]
+          (case f
+            :txn
+            (if (and (= type :info)
+                     (contains? checked (:txn-id value)))
+              ; We crashed, but a later txn-check operation will save us.
+              ; Save this info op until we get to that point.
+              (recur (next history)
+                     history'
+                     (assoc txn's (:txn-id value) op))
+
+              (recur (next history)
+                     (conj history' op)
+                     txn's))
+
+            :check-txn
+            (if (and (= type :ok)
+                     (#{:confirmed :failed} (:status value)))
+              (let [id   (:txn-id value)
+                    ; Fetch txn info, if possible
+                    txn' (get txn's id)]
+                (if txn'
+                  ; Rewrite this check-txn ok to a txn ok/fail
+                  (recur (next history)
+                         (conj history' (assoc op
+                                               :f :txn
+                                               :process (:process txn')
+                                               :type (case (:status value)
+                                                       :confirmed  :ok
+                                                       :failed     :fail)
+                                               :value (:value txn')))
+                         (dissoc txn's id))
+                  ; Either already resolved, or didn't crash in the first place?
+                  (recur (next history) history' txn's)))
+              ; Either an invocation, crash, or fail: can't tell us anything
+              (recur (next history) history' txn's))
+
+            ; Otherwise, add as normal
+            (recur (next history)
+                   (conj history' op)
+                   txn's)))))))
+
 )

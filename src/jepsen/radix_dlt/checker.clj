@@ -13,6 +13,7 @@
             [jepsen.radix-dlt.checker.util :refer [analysis
                                                    balance->txn-id-prefix
                                                    init-balance
+                                                   rewrite-info-txns
                                                    txn-id
                                                    txn-op-accounts]]
             [jepsen.tests.cycle.append :as append]
@@ -394,9 +395,14 @@
             inexplicable-balance-count (->> accounts
                                             (map (comp count
                                                        :inexplicable-balances))
-                                            (reduce + 0))]
+                                            (reduce + 0))
+            info-txn-count (->> history
+                                (filter op/info?)
+                                (filter (comp #{:txn} :f))
+                                count)]
            {:valid?                     true
             :errors                     errs
+            :info-txn-count             info-txn-count
             :possible-txn-count         possible-txn-count
             :logged-txn-count           logged-txn-count
             :unlogged-txn-count         unlogged-txn-count
@@ -418,6 +424,11 @@
     ; independently.
     (reify checker/Checker
       (check [this test history opts]
-        (let [analysis (analysis history)]
+        (let [history  (rewrite-info-txns history)
+              analysis (analysis history)]
+          ; As an aside: render perf plots off of the rewritten history in a
+          ; subdirectory.
+          (checker/check (checker/perf) test history
+                         (assoc opts :subdirectory "rewritten"))
           (checker/check composed test history
                          (assoc opts :analysis analysis)))))))
