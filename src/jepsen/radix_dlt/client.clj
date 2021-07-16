@@ -27,7 +27,9 @@
                                         TransactionHistoryDTO
                                         TransactionStatus
                                         TransactionStatusDTO
-                                        TxDTO)
+                                        TxDTO
+                                        ValidatorsResponseDTO
+                                        ValidatorDTO)
            (com.radixdlt.client.lib.impl SynchronousRadixApiClient)
            (com.radixdlt.client.lib.network HttpClients)
            (com.radixdlt.crypto ECKeyPair
@@ -38,7 +40,8 @@
            (com.radixdlt.utils.functional Failure
                                           Result)
            (java.util Optional)
-           (java.util.function Function)))
+           (java.util.function Function)
+           (org.bouncycastle.util.encoders Hex)))
 
 (defprotocol ToClj
   "Transforms RadixDLT client types into Clojure structures."
@@ -69,6 +72,15 @@
   :fee      (->clj (.getFee t))
   :message  (->clj (.getMessage t))
   :actions  (map ->clj (.getActions t)))
+
+(def-derived-map ValidatorMap [^ValidatorDTO v]
+  :address        (->clj (.getAddress v))
+  :owner-address  (->clj (.getOwnerAddress v))
+  :name           (.getName v)
+  :info-url       (.getInfoURL v)
+  :total-delegated-stake  (->clj (.getTotalDelegatedStake v))
+  :owner-delegation (->clj (.getOwnerDelegation v))
+  :external-stake-accepted? (.isExternalStakeAccepted v))
 
 (defn unres
   "Radix's client API wraps absolutely everything in Result types to avoid
@@ -170,8 +182,15 @@
     (BigInteger. 1 (.toByteArray x)))
 
   ValidatorAddress
+  (->clj [x] (.toString x))
+
+  ValidatorDTO
+  (->clj [x] (->ValidatorMap x))
+
+  ValidatorsResponseDTO
   (->clj [x]
-    (.toString x))
+    {:cursor (.orElse (.getCursor x) nil)
+     :validators (map ->clj (.getValidators x))})
 
   Object
   (->clj [x] x)
@@ -185,7 +204,12 @@
 
 (extend-protocol ToAccountAddress
   AccountAddress
-  (->account-address [x] x))
+  (->account-address [x] x)
+
+  String
+  (->account-address [x]
+    (let [readdr (com.radixdlt.identifiers.AccountAddress/parse x)]
+      (AccountAddress. readdr))))
 
 (defprotocol ToAID
   "Converts strings and AIDs back into AIDs. We do this because it's nice, for
@@ -200,6 +224,18 @@
 
   AID
   (->aid [a] a))
+
+(defprotocol ToValidatorAddress
+  (->validator-address [x] "Converts something to a ValidatorAddress"))
+
+(extend-protocol ToValidatorAddress
+  ValidatorAddress
+  (->validator-address [x] x)
+
+  String
+  (->validator-address [s]
+    (ValidatorAddress/create s)))
+
 
 ;; Basic type coercions
 
@@ -288,10 +324,14 @@
                             (.transfer builder from to (uint256 amount) rri))
 
                 :stake    (let [[_ from validator amount] action]
-                            (.stake builder from validator (uint256 amount)))
+                            (.stake builder
+                                    from
+                                    (->validator-address validator)
+                                    (uint256 amount)))
 
                 :unstake  (let [[_ from validator amount] action]
-                            (.unstake builder from validator
+                            (.unstake builder from
+                                      (->validator-address validator)
                                       (uint256 amount)))))
             (.. (TransactionRequest/createBuilder)
                 (message (str message)))
@@ -411,6 +451,29 @@
         (finalize-txn client txn key-pair)
         (submit-txn! client txn)))
 
+(defn paginated
+  "Takes a function (chunk cursor), where cursor is an Optional<Cursor>, where
+  `chunk` returns something which can be coerced via ->clj to a map of {:cursor
+  Cursor, ...}, representing a page of results. Also takes a function of each
+  chunk which extracts results from it. Yields a lazy sequence of results."
+  ([chunk results]
+   ; A bit weird: here the absence of a cursor means we're *starting* the
+   ; sequence; later the absence of a cursor means the sequence is *ending*.
+   (lazy-seq
+     ; Fetch initial chunk
+     (let [c (->clj (chunk (Optional/empty)))]
+       (concat (results c)
+               (paginated chunk results (:cursor c))))))
+  ([chunk results cursor]
+   ; Without a cursor, we're at the end of the sequence
+   (when (and cursor
+              ; It looks like they signal the end with an empty string value?
+              (not= "" (.value cursor)))
+     (lazy-seq
+       (let [c (-> cursor Optional/of chunk ->clj)]
+         (concat (results c)
+                 (paginated chunk results (:cursor c))))))))
+
 (def history-chunk-size
   "What's the `size` parameter we pass to each transaction history request?"
   128)
@@ -422,34 +485,19 @@
   ([^RadixApi client address]
    (txn-history client address history-chunk-size))
   ([^RadixApi client address size]
-   ; A bit weird: here the absence of a cursor means we're *starting* the
-   ; sequence; later the absence of a cursor means the sequence is *ending*.
-   (lazy-seq
-     ; Fetch initial chunk
-     (let [chunk (-> client
-                     (.transactionHistory address size (Optional/empty))
-                     ->clj)]
-       ;(info :initial-chunk (->> chunk :txns count)
-       ;      :ids      (->> chunk :txns (map :id))
-       ;      :messages (->> chunk :txns (map :message)))
-       (concat (:txns chunk)
-               (txn-history client address size (:cursor chunk))))))
-  ([^RadixApi client ^AccountAddress address size cursor]
-   ; Without a cursor, we're at the end of the sequence
-   (when (and cursor
-              ; It looks like they signal the end with an empty string value?
-              (not= "" (.value cursor)))
-     (lazy-seq
-       (let [chunk (-> client
-                       (.transactionHistory
-                         address size (Optional/of cursor))
-                       ->clj)]
-         ;(info :later-chunk (->> chunk :txns count)
-         ;      :cursor (.value cursor)
-         ;      :ids      (->> chunk :txns (map :id))
-         ;      :messages (->> chunk :txns (map :message)))
-         (concat (:txns chunk)
-                 (txn-history client address size (:cursor chunk))))))))
+   (paginated (fn chunk [cursor]
+                (.transactionHistory client address size cursor))
+              :txns)))
+
+(def validator-chunk-size
+  "How many validators do we fetch at a time, by default?"
+  128)
+
+(defn validators
+  "Takes a Radix Client and returns a lazy seq of validator states."
+  [^RadixApi client]
+  (paginated (fn chunk [cursor] (.validators client validator-chunk-size cursor))
+             :validators))
 
 (defn await-initial-convergence
   "When Radix first starts up, there's a period of ~80 seconds where it's not
