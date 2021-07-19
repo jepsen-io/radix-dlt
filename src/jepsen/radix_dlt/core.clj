@@ -45,7 +45,7 @@
                                            :primaries
                                            ]}
                      :pause {:targets [:one :majority]}
-                     :kill {:targets [:one :majority]}
+                     :kill {:targets [:primaries]}
                      :interval (:nemesis-interval opts)})]
     (merge tests/noop-test
            opts

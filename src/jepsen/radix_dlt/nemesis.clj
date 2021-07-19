@@ -8,7 +8,9 @@
             [jepsen.nemesis [combined :as nc]
                             [membership :as membership]]
             [jepsen.radix-dlt [client :as rc]
-                              [db :as db]]))
+                              [db :as db]]
+            [slingshot.slingshot :refer [try+ throw+]]))
+
 
 (def staker
   "Which account do we use to restake funds?"
@@ -89,13 +91,17 @@
   (node-view [this test node]
     ;(info :fetching-view-for node)
     ;(info :view node (pprint-str (rc/validators (clients node))))
-    (let [validators (rc/validators (clients node))]
-      ; Add node names to each validator
-      (->> validators
-           (mapv (fn [validator]
-                   (assoc validator :node
-                          (db/validator-address->node (:db test)
-                                                      (:address validator))))))))
+    (try+
+      (let [validators (rc/validators (clients node))]
+        ; Add node names to each validator
+        (->> validators
+             (mapv (fn [validator]
+                     (assoc validator :node
+                            (db/validator-address->node (:db test)
+                                                        (:address validator)))))))
+      (catch [:type :radix-dlt/failure, :code 1604] e
+        ; Parse error
+        nil)))
 
   (merge-views [this test]
     (->> node-views

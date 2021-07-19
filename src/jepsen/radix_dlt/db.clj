@@ -462,6 +462,7 @@ export RADIXDLT_STAKER_1_PRIVKEY=p7vk1dMv5A0agIbcgB6TWdhKnyunAJTFW9bK6ZiSCHg=
                {:node     node
                 :key-pair key-pair
                 :address  (str (rc/->validator-address key-pair))})
+        (info :validators @validators)
         (cu/start-daemon!
           {:chdir   dir
            :logfile log-file
