@@ -8,7 +8,8 @@
             [jepsen [util :as util :refer [pprint-str]]]
             [potemkin :refer [def-derived-map]]
             [slingshot.slingshot :refer [try+ throw+]])
-  (:import (com.radixdlt.client.lib.api AccountAddress
+  (:import ;(com.radixdlt.api.data.action UpdateValidatorMetadataAction)
+           (com.radixdlt.client.lib.api AccountAddress
                                         ActionType
                                         NavigationCursor
                                         RadixApi
@@ -39,7 +40,8 @@
                                UInt256)
            (com.radixdlt.utils.functional Failure
                                           Result)
-           (java.util Optional)
+           (java.util Base64
+                      Optional)
            (java.util.function Function)
            (org.bouncycastle.util.encoders Hex)))
 
@@ -202,50 +204,6 @@
   "Converts strings and AccountAddresses back into AccountAddresses."
   (->account-address [x]))
 
-(extend-protocol ToAccountAddress
-  AccountAddress
-  (->account-address [x] x)
-
-  String
-  (->account-address [x]
-    (let [readdr (com.radixdlt.identifiers.AccountAddress/parse x)]
-      (AccountAddress. readdr))))
-
-(defprotocol ToAID
-  "Converts strings and AIDs back into AIDs. We do this because it's nice, for
-  our purposes, to have cleanly serializable atom IDs that we can write to logs
-  and include in operations, but when we invoke methods, they're going to
-  expect AID types again."
-  (->aid [x]))
-
-(extend-protocol ToAID
-  String
-  (->aid [s] (AID/from s))
-
-  AID
-  (->aid [a] a))
-
-(defprotocol ToValidatorAddress
-  (->validator-address [x] "Converts something to a ValidatorAddress"))
-
-(extend-protocol ToValidatorAddress
-  ValidatorAddress
-  (->validator-address [x] x)
-
-  String
-  (->validator-address [s]
-    (ValidatorAddress/create s)))
-
-
-;; Basic type coercions
-
-(defn ^UInt256 uint256
-  "Turns a number into a UInt256"
-  [n]
-  (condp instance? n
-    clojure.lang.BigInt (UInt256/from (str n))
-    Long                (UInt256/from ^long n)))
-
 ;; Keypair management
 
 (defn ^ECKeyPair key-pair
@@ -278,6 +236,74 @@
   "Turns an ECKeyPair into an AccountAddress."
   [^ECKeyPair key-pair]
   (AccountAddress/create (public-key key-pair)))
+
+(defn private-key-str->key-pair
+  "Converts a private key string (e.g.
+  ZCpcCF2EhnPBt774Y6UTZ5qSaIiPhfkBmr1zw9ZtklA=; a base64-encoded string from
+  the generated universe) to an ECKeyPair."
+  [base64-str]
+  (-> (Base64/getDecoder)
+      (.decode base64-str)
+      ECKeyPair/fromPrivateKey))
+
+;; Coercions for account & validator addresses
+
+(extend-protocol ToAccountAddress
+  AccountAddress
+  (->account-address [x] x)
+
+  String
+  (->account-address [x]
+    (let [readdr (com.radixdlt.identifiers.AccountAddress/parse x)]
+      (AccountAddress. readdr))))
+
+(defprotocol ToValidatorAddress
+  (->validator-address [x] "Converts something to a ValidatorAddress"))
+
+(extend-protocol ToValidatorAddress
+  ValidatorAddress
+  (->validator-address [x] x)
+
+  String
+  (->validator-address [s]
+    (ValidatorAddress/create s))
+
+  ECPublicKey
+  (->validator-address [k]
+    ; ValidatorAddress literally exists to wrap an ECPublicKey, but we can't
+    ; actually CONSTRUCT one because the constructor is private; it wants us to
+    ; go through a string. No, it's not clear what that string should be; I'm
+    ; guessing here based on the definition of ValidatorAddress.toString, which
+    ; goes through com.radixdlt.identifiers.ValidatorAddress/of.
+    (-> k com.radixdlt.identifiers.ValidatorAddress/of ->validator-address))
+
+  ECKeyPair
+  (->validator-address [kp]
+    (->validator-address (public-key kp))))
+
+(defprotocol ToAID
+  "Converts strings and AIDs back into AIDs. We do this because it's nice, for
+  our purposes, to have cleanly serializable atom IDs that we can write to logs
+  and include in operations, but when we invoke methods, they're going to
+  expect AID types again."
+  (->aid [x]))
+
+(extend-protocol ToAID
+  String
+  (->aid [s] (AID/from s))
+
+  AID
+  (->aid [a] a))
+
+
+;; Basic type coercions
+
+(defn ^UInt256 uint256
+  "Turns a number into a UInt256"
+  [n]
+  (condp instance? n
+    clojure.lang.BigInt (UInt256/from (str n))
+    Long                (UInt256/from ^long n)))
 
 (defn ^SynchronousRadixApiClient open
   "Opens a connection to a node."

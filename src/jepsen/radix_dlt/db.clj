@@ -6,7 +6,7 @@
             [clojure.tools.logging :refer [info warn]]
             [clj-cbor.core :as cbor]
             [clj-http.client :as http]
-            [dom-top.core :as dt]
+            [dom-top.core :as dt :refer [assert+]]
             [jepsen [control :as c]
                     [core :as jepsen :refer [primary]]
                     [db :as db]
@@ -222,7 +222,7 @@ export RADIXDLT_STAKER_1_PRIVKEY=p7vk1dMv5A0agIbcgB6TWdhKnyunAJTFW9bK6ZiSCHg=
             ;(info "dev universe:\n" out)
             (parse-universe-exports out)))))
 
-(defn universe
+(defn get-universe
   "Returns a cached universe, or generates a new one."
   [test]
   (let [path [:radixdlt :universe]]
@@ -240,6 +240,7 @@ export RADIXDLT_STAKER_1_PRIVKEY=p7vk1dMv5A0agIbcgB6TWdhKnyunAJTFW9bK6ZiSCHg=
 (defn env
   "The environment map for a node."
   [test node universe]
+  ;(info :universe (pprint-str universe))
   (assert (= (count (:nodes test)) (:validators test))
           "We don't know how to start a cluster where some nodes aren't validators yet.")
   {:JAVA_OPTS "-server -Xms3g -Xmx3g -XX:+HeapDumpOnOutOfMemoryError -Djavax.net.ssl.trustStore=/etc/ssl/certs/java/cacerts -Djavax.net.ssl.trustStoreType=jks -Djava.security.egd=file:/dev/urandom -DLog4jContextSelector=org.apache.logging.log4j.core.async.AsyncLoggerContextSelector"
@@ -401,58 +402,111 @@ export RADIXDLT_STAKER_1_PRIVKEY=p7vk1dMv5A0agIbcgB6TWdhKnyunAJTFW9bK6ZiSCHg=
                  :res  res
                  :node node})))
 
+(defn validator-address->node
+  "Takes a DB and string representation of a validator address (e.g.
+  vb1qwyxnktxunxsvav0ac769m52tagzwy66kckzu8eftl0mew4pnpfj7zzrdty) and converts
+  it to a node name like \"n1\"."
+  [db validator-address]
+  (assert+ (->> db :validators deref vals
+                (filter (comp #{validator-address} :address))
+                first
+                :node)
+           {:type :no-such-validator
+            :address validator-address
+            :validators @(:validators db)}))
+
+(defrecord DB [; A promise of a Universe structure
+               universe
+               ; An atom containing a map of node names to maps like
+               ; {:node     "n1"
+               ;  :key-pair ECKeyPair
+               ;  :validator-address "vb..."}
+               validators]
+  db/DB
+  (setup! [this test node]
+    (when (= node (primary test))
+      (deliver universe (get-universe test))
+      ;(info :universe (pprint-str @uni))
+      )
+
+    (install! test)
+    (configure! test node @universe)
+    (restart-nginx!)
+    (db/start! this test node)
+    (await-node node)
+    ; Hack: even though the /node is ready, the client api might take
+    ; longer, and we'll get weird parse errors when HTML shows up instead
+    ; of JSON
+    (rc/await-initial-convergence node))
+
+  (teardown! [this test node]
+    (db/kill! this test node)
+    (c/su (c/exec :rm :-rf dir)))
+
+  db/LogFiles
+  (log-files [this test node]
+    [log-file
+     (str dir "/logs/radixdlt-core.log")
+     (str dir "/default.config")
+     ])
+
+  db/Process
+  (start! [this test node]
+    (c/su
+      ; Squirrel away this node's validator information
+      (let [universe @universe
+            key-pair (-> universe
+                         (get-in [:validators (node-index test node) :privkey])
+                         rc/private-key-str->key-pair)]
+        (swap! validators assoc node
+               {:node     node
+                :key-pair key-pair
+                :address  (str (rc/->validator-address key-pair))})
+        (cu/start-daemon!
+          {:chdir   dir
+           :logfile log-file
+           :pidfile pid-file
+           :env     (env test node universe)}
+          (str bin-dir "/radixdlt")
+          ; No args?
+          ))))
+
+  (kill! [this test node]
+    (c/su
+      ; The script immediately execs, so pidfile is actually useless here
+      (cu/stop-daemon! "java" pid-file)))
+
+  db/Pause
+  (pause! [this test node]
+    (cu/grepkill! :STOP "java"))
+
+  (resume! [this test node]
+    (cu/grepkill! :CONT "java"))
+
+  db/Primary
+  (setup-primary! [db test node])
+  (primaries [db test]
+    ; Our notion of a primary node is one with a supermajority of the total
+    ; stake.
+    (try+
+      (let [client      (rc/open (rand-nth (:nodes test)))
+            validators  (rc/validators client)
+            total-stake (->> validators
+                             (map :total-delegated-stake)
+                             (reduce + 0))]
+        (info :total-stake total-stake)
+        ; If there's no stake, we can't do anything here.
+        (when-not (zero? total-stake)
+          (let [threshold (* 2/3 total-stake)
+                supermaj (->> validators
+                              (filter (comp (partial < threshold)
+                                            :total-delegated-stake))
+                              first)]
+            (info :supermaj supermaj)
+            (when supermaj
+              [(validator-address->node db (:address supermaj))])))))))
+
 (defn db
   "The Radix DLT database."
   []
-  (let [uni (promise)]
-    (reify db/DB
-      (setup! [this test node]
-        (when (= node (primary test))
-          (deliver uni (universe test))
-          ;(info :universe (pprint-str @uni))
-          )
-
-        (install! test)
-        (configure! test node @uni)
-        (restart-nginx!)
-        (db/start! this test node)
-        (await-node node)
-        ; Hack: even though the /node is ready, the client api might take
-        ; longer, and we'll get weird parse errors when HTML shows up instead
-        ; of JSON
-        (rc/await-initial-convergence node))
-
-      (teardown! [this test node]
-        (db/kill! this test node)
-        (c/su (c/exec :rm :-rf dir)))
-
-      db/LogFiles
-      (log-files [this test node]
-        [log-file
-         (str dir "/logs/radixdlt-core.log")
-         (str dir "/default.config")
-         ])
-
-      db/Process
-      (start! [this test node]
-        (c/su
-          (cu/start-daemon!
-            {:chdir   dir
-             :logfile log-file
-             :pidfile pid-file
-             :env     (env test node @uni)}
-            (str bin-dir "/radixdlt")
-            ; No args?
-            )))
-
-      (kill! [this test node]
-        (c/su
-          ; The script immediately execs, so pidfile is actually useless here
-          (cu/stop-daemon! "java" pid-file)))
-
-      db/Pause
-      (pause! [this test node]
-        (cu/grepkill! :STOP "java"))
-
-      (resume! [this test node]
-        (cu/grepkill! :CONT "java")))))
+  (DB. (promise) (atom {})))

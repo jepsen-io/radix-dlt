@@ -39,9 +39,10 @@
                     {:db db
                      :nodes     (:nodes opts)
                      :faults    (:nemesis opts)
-                     :partition {:targets [:one
+                     :partition {:targets [;:one
                                            ;:majority
-                                           :majorities-ring
+                                           ;:majorities-ring
+                                           :primaries
                                            ]}
                      :pause {:targets [:one :majority]}
                      :kill {:targets [:one :majority]}

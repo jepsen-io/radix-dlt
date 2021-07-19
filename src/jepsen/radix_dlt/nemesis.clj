@@ -18,6 +18,61 @@
   "How much stake do you need to dominate consensus?"
   2/3)
 
+(defn total-stake
+  "What's the total stake in this view of the cluster?"
+  [view]
+  (->> view
+       (map :total-delegated-stake)
+       (reduce + 0)))
+
+(defn supermajority-node
+  "Which node currently holds a supermajority of this view? Nil if no node is
+  known."
+  [view]
+  (letr [total-stake (total-stake view)
+         _ (when (= 0 total-stake) (return nil))
+         threshold (* supermajority total-stake)]
+    (->> view
+         (filter (comp (partial < threshold) :total-delegated-stake))
+         first
+         :node)))
+
+(defn stake-op
+  "Takes a Membership state and returns an op which restakes a supermajority of
+  the stake onto a single node, or nil if no such op is needed."
+  [{:keys [view pending] :as membership}]
+  ; Look at the distribution of stake
+  (letr [_ (when (seq pending)
+             ; Don't bother emitting a stake action if one is still
+             ; pending.
+             (return nil))
+         total-stake (->> view
+                          (map :total-delegated-stake)
+                          (reduce + 0))
+         _ (when (= 0 total-stake) (return nil))
+         ; Pick a target we want to make a heavyweight
+         heavyweight (first (sort-by :address view))
+         ; What's their fraction of the total?
+         heavyweight-frac (/ (:total-delegated-stake heavyweight)
+                             total-stake)
+         ; How much do we need to add to tip them into supermajority territory?
+         ;             supermaj = (heavy + x) / (total + x)
+         ; supermaj (total + x) = heavy + x
+         ; supermaj * total + supermaj * x = heavy + x
+         ; supermaj * total - heavy = x - (supermaj * x)
+         ; supermaj * total - heavy = x * (1 - supermaj)
+         ; supermaj * total - heavy / (1 - supermaj) = x
+         x (/ (- (* supermajority total-stake)
+                 (:total-delegated-stake heavyweight))
+              (- 1 supermajority))
+         ; Give a liiiittle extra just to make sure--not sure if 2/3 exactly
+         ; is enough or not.
+         x (inc x)
+         ;_ (info :heavyweight heavyweight :frac heavyweight-frac :has (:total-delegated-stake heavyweight) :needs x)
+         ]
+    {:type :info, :f :stake, :value {:validator (:address heavyweight)
+                                     :amount x}}))
+
 (defrecord Membership
   [clients    ; A map of nodes to RadixApi clients.
    node-views ; A map of nodes to that node's view of the cluster
@@ -34,7 +89,13 @@
   (node-view [this test node]
     ;(info :fetching-view-for node)
     ;(info :view node (pprint-str (rc/validators (clients node))))
-    (vec (rc/validators (clients node))))
+    (let [validators (rc/validators (clients node))]
+      ; Add node names to each validator
+      (->> validators
+           (mapv (fn [validator]
+                   (assoc validator :node
+                          (db/validator-address->node (:db test)
+                                                      (:address validator))))))))
 
   (merge-views [this test]
     (->> node-views
@@ -45,37 +106,7 @@
     #{:stake :unstake})
 
   (op [this test]
-    ; Look at the distribution of stake
-    (letr [_ (when (seq pending)
-               ; Don't bother emitting a stake action if one is still
-               ; pending.
-               (return :pending))
-           total-stake (->> view
-                           (map :total-delegated-stake)
-                           (reduce + 0))
-           _ (when (= 0 total-stake) (return :pending))
-          ; Pick a target we want to make a heavyweight
-          heavyweight (first (sort-by :address view))
-          ; What's their fraction of the total?
-          heavyweight-frac (/ (:total-delegated-stake heavyweight)
-                              total-stake)
-          ; How much do we need to add to tip them into supermajority territory?
-          ;             supermaj = (heavy + x) / (total + x)
-          ; supermaj (total + x) = heavy + x
-          ; supermaj * total + supermaj * x = heavy + x
-          ; supermaj * total - heavy = x - (supermaj * x)
-          ; supermaj * total - heavy = x * (1 - supermaj)
-          ; supermaj * total - heavy / (1 - supermaj) = x
-          x (/ (- (* supermajority total-stake)
-                  (:total-delegated-stake heavyweight))
-               (- 1 supermajority))
-          ; Give a liiiittle extra just to make sure--not sure if 2/3 exactly
-          ; is enough or not.
-          x (inc x)
-          ;_ (info :heavyweight heavyweight :frac heavyweight-frac :has (:total-delegated-stake heavyweight) :needs x)
-          ]
-      {:type :info, :f :stake, :value {:validator (:address heavyweight)
-                                       :amount x}}))
+    (or (stake-op this) :pending))
 
   (invoke! [this test {:keys [f value] :as op}]
     (case f
