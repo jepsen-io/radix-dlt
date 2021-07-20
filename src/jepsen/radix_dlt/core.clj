@@ -21,12 +21,25 @@
    :standard  [:pause :kill :partition :clock]
    :all       [:pause :kill :partition :clock]})
 
+(def db-targets
+  "Valid targets for DB nemesis operations."
+  #{:one :primaries :minority-third :majority :all})
+
+(def partition-targets
+  "Valid targets for partition nemesis operations."
+  #{:one :primaries :minority-third :majority-ring})
+
+(defn parse-comma-kws
+  "Takes a comma-separated string and returns a collection of keywords."
+  [spec]
+  (->> (str/split spec #",")
+       (map keyword)))
+
 (defn parse-nemesis-spec
   "Takes a comma-separated nemesis string and returns a collection of keyword
   faults."
   [spec]
-  (->> (str/split spec #",")
-       (map keyword)
+  (->> (parse-comma-kws spec)
        (mapcat #(get special-nemeses % [%]))
        set))
 
@@ -39,14 +52,11 @@
                     {:db db
                      :nodes     (:nodes opts)
                      :faults    (:nemesis opts)
-                     :partition {:targets [;:one
-                                           ;:majority
-                                           ;:majorities-ring
-                                           :primaries
-                                           ]}
-                     :pause {:targets [:one :majority]}
-                     :kill {:targets [:primaries]}
-                     :interval (:nemesis-interval opts)})]
+                     :partition {:targets (:partition-targets opts)}
+                     :clock     {:targets (:db-targets opts)}
+                     :pause     {:targets (:db-targets opts)}
+                     :kill      {:targets (:db-targets opts)}
+                     :interval  (:nemesis-interval opts)})]
     (merge tests/noop-test
            opts
            {:os               debian/os
@@ -78,8 +88,18 @@
 
 (def cli-opts
   "Command line option specifications."
-  [[nil "--node-runner-version VERSION-STRING" "Which version of https://github.com/radixdlt/node-runner/releases should we use to install Radix?"
+  [[nil "--db-targets TARGETS" "A comma-separated list of nodes to pause/kill/etc; e.g. one,all"
+    :default [:minority-third :majority :all]
+    :parse-fn parse-comma-kws
+    :validate [(partial every? db-targets) (cli/one-of db-targets)]]
+
+   [nil "--node-runner-version VERSION-STRING" "Which version of https://github.com/radixdlt/node-runner/releases should we use to install Radix?"
     :default "1.0-beta.35.1"]
+
+   [nil "--partition-targets TARGETS" "A comma-separated list of nodes to target for network partitions; e.g. one,all"
+    :default [:minority-third :majorities-ring]
+    :parse-fn parse-comma-kws
+    :validate [(partial every? partition-targets) (cli/one-of partition-targets)]]
 
    [nil "--radix-git-version COMMIT" "What commit from radix-dlt should we check out?"
     :default "09e06232ac26e51faf567bc0af7324341508ddfc"]
