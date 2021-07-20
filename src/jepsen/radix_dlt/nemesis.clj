@@ -80,6 +80,8 @@
    node-views ; A map of nodes to that node's view of the cluster
    view       ; Merged view of operations
    pending    ; Pending [op op'] pairs.
+   free       ; A set of nodes in the test which we know are not part of the
+              ; cluster
    ]
 
   membership/State
@@ -109,7 +111,7 @@
          val))
 
   (fs [this]
-    #{:stake :unstake})
+    #{:stake :unstake :remove-node})
 
   (op [this test]
     (or (stake-op this) :pending))
@@ -147,7 +149,9 @@
   (info :membership opts)
   (membership/package
     (assoc opts
-           :membership {:state (map->Membership {})
+           :membership {:state (map->Membership
+                                 {:free #{}
+                                  })
                         :log-node-views? false
                         :log-view? true})))
 
