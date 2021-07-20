@@ -409,6 +409,21 @@
             :balance-count              balance-count
             :inexplicable-balance-count inexplicable-balance-count}))))
 
+(defn txn-perf
+  "Perf graphs just for transactions--sometimes the plots can get a little
+  noisy."
+  []
+  (reify checker/Checker
+    (check [this test history opts]
+      (checker/check (checker/perf (:perf-opts test))
+                     test
+                     (->> history
+                          (filter (fn [op]
+                                    (or (= :txn (:f op))
+                                        (= :nemesis (:process op)))))
+                          vec)
+                     (assoc opts :subdirectory "txn-perf")))))
+
 (defn checker
   "Unified checker."
   []
@@ -419,7 +434,8 @@
                     :inexplicable (inexplicable-balance-checker)
                     :list-append  (list-append-checker)
                     :balance-vis  (balance-vis-checker)
-                    :timeline     (timeline/html)})]
+                    :timeline     (timeline/html)
+                    :txn-perf     (txn-perf)})]
     ; We want to compute the analysis just once, and let every checker use it
     ; independently.
     (reify checker/Checker
@@ -428,7 +444,7 @@
               analysis (analysis history)]
           ; As an aside: render perf plots off of the rewritten history in a
           ; subdirectory.
-          (checker/check (checker/perf) test history
+          (checker/check (checker/perf (:perf-opts test)) test history
                          (assoc opts :subdirectory "rewritten"))
           (checker/check composed test history
                          (assoc opts :analysis analysis)))))))

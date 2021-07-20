@@ -71,6 +71,7 @@
                                  :perf     (checker/perf
                                              {:nemeses (:perf nemesis)})
                                  :ex       (checker/unhandled-exceptions)})
+            :perf-opts        {:nemeses (:perf nemesis)}
             :generator        (gen/phases
                                 (->> (:generator workload)
                                      (gen/stagger (/ (:rate opts)))
