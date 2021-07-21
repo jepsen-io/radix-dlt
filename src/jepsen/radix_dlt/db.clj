@@ -387,15 +387,38 @@ export RADIXDLT_STAKER_1_PRIVKEY=p7vk1dMv5A0agIbcgB6TWdhKnyunAJTFW9bK6ZiSCHg=
   []
   (c/su (c/exec :systemctl :restart :nginx)))
 
+(defn admin-http-opts
+  "Returns common HTTP options for making calls to the admin HTTP interface."
+  []
+  {:basic-auth ["admin" password]
+   :as         :json
+   :insecure?  true})
+
+(defn rpc!
+  "Makes a JSONRPC call to the given path on the given node."
+  [node path rpc-req]
+  (info "Requesting" (str "https://" node path))
+  (let [res (http/post (str "https://" node path)
+                       (assoc (admin-http-opts)
+                              :content-type :json
+                              :form-params (assoc rpc-req
+                                                  :jsonrpc "2.0"
+                                                  :id 1)))]
+    (:body res)))
+
+(defn validation-node-info
+  "Returns the node's current validator information."
+  [node]
+  (rpc! node "/validation" {:method :validation.get_node_info
+                            :params []}))
+
 (defn await-node
   "Blocks until we can fetch the /node JSON data"
   [node]
   (let [res (util/await-fn
                (fn []
                  (:body (http/get (str "https://" node "/node")
-                                  {:basic-auth  ["admin" password]
-                                   :as          :json
-                                   :insecure?   true})))
+                                  (admin-http-opts))))
                {:log-message (str "Waiting for https://" node "/node")})]
     (dt/assert+ (:address res)
                 {:type ::malformed-node-data?
@@ -411,8 +434,8 @@ export RADIXDLT_STAKER_1_PRIVKEY=p7vk1dMv5A0agIbcgB6TWdhKnyunAJTFW9bK6ZiSCHg=
                 (filter (comp #{validator-address} :address))
                 first
                 :node)
-           {:type :no-such-validator
-            :address validator-address
+           {:type       :no-such-validator
+            :address    validator-address
             :validators @(:validators db)}))
 
 (defrecord DB [; A promise of a Universe structure

@@ -4,7 +4,7 @@
             [dom-top.core :as dt :refer [letr]]
             [jepsen [generator :as gen]
                     [nemesis :as n]
-                    [util :refer [pprint-str]]]
+                    [util :refer [pprint-str rand-nth-empty]]]
             [jepsen.nemesis [combined :as nc]
                             [membership :as membership]]
             [jepsen.radix-dlt [client :as rc]
@@ -75,20 +75,39 @@
     {:type :info, :f :stake, :value {:validator (:address heavyweight)
                                      :amount x}}))
 
+(defn remove-node-op
+  "Takes a Membership state and returns an op (if possible) for removing a node
+  from the cluster."
+  [{:keys [view free]}]
+  ; Pick a random node not in the free state
+  (when-let [node (rand-nth-empty (remove free (:nodes test)))]
+    {:type :info, :f :remove-node, :value node}))
+
+(defn register-node-op
+  "Takes a membership state and returns an operation for unregistering a node
+  as a validator."
+  [{:keys [validators view]}]
+  ; TODO
+  )
+
 (defrecord Membership
   [clients    ; A map of nodes to RadixApi clients.
    node-views ; A map of nodes to that node's view of the cluster
-   view       ; Merged view of operations
+   view       ; Merged view of cluster state
    pending    ; Pending [op op'] pairs.
-   free       ; A set of nodes in the test which we know are not part of the
-              ; cluster
+   free       ; A set of nodes which are not participating in the cluster.
+   validators ; A set of nodes we've instructed to become validators.
    ]
 
   membership/State
   (setup! [this test]
-    (assoc this :clients (->> (:nodes test)
-                              (map (juxt identity rc/open))
-                              (into {}))))
+    (assoc this
+           ; Initially, every node is a validator.
+           :validators (set (:nodes test))
+           ; Keep a client for each node.
+           :clients (->> (:nodes test)
+                         (map (juxt identity rc/open))
+                         (into {}))))
 
   (node-view [this test node]
     ;(info :fetching-view-for node)
@@ -96,25 +115,40 @@
     (try+
       (let [validators (rc/validators (clients node))]
         ; Add node names to each validator
-        (->> validators
-             (mapv (fn [validator]
-                     (assoc validator :node
-                            (db/validator-address->node (:db test)
-                                                        (:address validator)))))))
+        {:validators (->> validators
+                          (mapv (fn [validator]
+                                  (assoc validator :node
+                                         (db/validator-address->node (:db test)
+                                                                     (:address validator))))))
+         :validation-info (db/validation-node-info node)})
       (catch [:type :radix-dlt/failure, :code 1604] e
         ; Parse error
         nil)))
 
   (merge-views [this test]
-    (->> node-views
-         first
-         val))
+    ; We take each node's own view of its validation node info, and make a map
+    ; of nodes to those structures.
+    {:validation-info (reduce (fn [vi [node view]]
+                                (assoc vi node (:validation-info view)))
+                              {}
+                              node-views)
+     ; And for the validators, we combine all views and pick any value for each
+     ; distinct node. No way to get a causal timestamp here, far as I know:
+     ; we're just gonna be wrong sometimes.
+     :validators (->> (vals node-views)
+                      (group-by :node)
+                      vals
+                      (mapv first))})
 
   (fs [this]
-    #{:stake :unstake :remove-node})
+    #{:stake
+      :unstake
+      :remove-node})
 
   (op [this test]
-    (or (stake-op this) :pending))
+    (or (stake-op this)
+        (remove-node-op this)
+        :pending))
 
   (invoke! [this test {:keys [f value] :as op}]
     (case f
@@ -154,6 +188,17 @@
                                   })
                         :log-node-views? false
                         :log-view? true})))
+
+(defn rollback-package
+  "Nodes in Radix basically aren't supposed to fail: when they do, a certain
+  fraction of transactions will time out until the next leader can take over
+  for each round. To that end, they suggest that when you need to perform
+  routine maintenance, you have a non-validator standby node running, then copy
+  the validator's key file over to that node, stop the old node, and restart
+  the new one."
+  []
+  ; TODO: need capability to change nodes between validators and non-validators
+  )
 
 (defn package
   "Given CLI options, constructs a package of {:generator, :final-generator,
