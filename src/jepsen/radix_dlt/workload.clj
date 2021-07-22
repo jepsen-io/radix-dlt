@@ -95,7 +95,7 @@
            (assoc ~op :type :fail, :error [:substate-not-found
                                            (:message e#)]))
          (catch [:type :radix-dlt/failure, :code 1604] e#
-           (assoc ~op :type :fail, :error :parse-error))
+           (assoc ~op :type :fail, :error [:parse-error (:message e#)]))
          (catch [:type :radix-dlt/failure, :code 2515] e#
            (assoc ~op :type :fail, :error :insufficient-balance))))
 
@@ -146,10 +146,19 @@
                                  :failed     :fail)))))
 
         :check-txn
-        (let [status (:status (rc/txn-status conn (:txn-id value)))]
-          (assoc op
-                 :type :ok
-                 :value (assoc value :status status)))
+        (try+ (let [status (:status (rc/txn-status conn (:txn-id value)))]
+                (assoc op
+                       :type :ok
+                       :value (assoc value :status status)))
+          (catch [:type :radix-dlt/failure
+                  :code 1604] e#
+            (if (re-find #"missing required creator property 'status'"
+                         (:message e#))
+              ; After a few hours, beta.35.1 returns JSON objects the client
+              ; doesn't know how to deserialize. We treat these as a :info op,
+              ; because sometimes they actually DO go on to be resolved.
+              (assoc op :type :info, :error :missing-status-field)
+              (throw+ e#))))
 
         :txn-log
         (let [; A little helper: we want to translate addresses into numeric IDs
@@ -497,7 +506,7 @@
     (let [[op gen'] (gen/op gen test context)
           ; And a txn-id we might want to check on
           txn-id    (peek txns)]
-      (info :txn-id txn-id :f (:f op))
+      ;(info :txn-id txn-id :f (:f op))
       (if (and txn-id
                (< (rand) 1/2) ; Only rewrite some requests.
                (#{:txn-log :balance} (:f op)))
