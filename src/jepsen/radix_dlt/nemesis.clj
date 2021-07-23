@@ -2,13 +2,15 @@
   "Fault injection for Radix clusters"
   (:require [clojure.tools.logging :refer [info warn]]
             [dom-top.core :as dt :refer [letr]]
-            [jepsen [generator :as gen]
+            [jepsen [control :as c]
+                    [db :as db]
+                    [generator :as gen]
                     [nemesis :as n]
                     [util :refer [pprint-str rand-nth-empty]]]
             [jepsen.nemesis [combined :as nc]
                             [membership :as membership]]
             [jepsen.radix-dlt [client :as rc]
-                              [db :as db]]
+                              [db :as rdb]]
             [slingshot.slingshot :refer [try+ throw+]]))
 
 
@@ -23,7 +25,7 @@
 (defn total-stake
   "What's the total stake in this view of the cluster?"
   [view]
-  (->> view
+  (->> (:validators view)
        (map :total-delegated-stake)
        (reduce + 0)))
 
@@ -48,12 +50,12 @@
              ; Don't bother emitting a stake action if one is still
              ; pending.
              (return nil))
-         total-stake (->> view
-                          (map :total-delegated-stake)
-                          (reduce + 0))
+         total-stake (total-stake view)
          _ (when (= 0 total-stake) (return nil))
          ; Pick a target we want to make a heavyweight
-         heavyweight (first (sort-by :address view))
+         heavyweight (last (sort-by (juxt :total-delegated-stake
+                                          :address)
+                                    (:validators view)))
          ; What's their fraction of the total?
          heavyweight-frac (/ (:total-delegated-stake heavyweight)
                              total-stake)
@@ -75,15 +77,30 @@
     {:type :info, :f :stake, :value {:validator (:address heavyweight)
                                      :amount x}}))
 
+(defn active-nodes
+  "Returns all nodes which are currently participating in the cluster."
+  [{:keys [nodes free]}]
+  (remove free nodes))
+
 (defn remove-node-op
   "Takes a Membership state and returns an op (if possible) for removing a node
   from the cluster."
-  [{:keys [view free]}]
+  [{:keys [view free] :as membership}]
   ; Pick a random node not in the free state
-  (when-let [node (rand-nth-empty (remove free (:nodes test)))]
+  (when-let [node (rand-nth-empty (active-nodes membership))]
     {:type :info, :f :remove-node, :value node}))
 
-(defn register-node-op
+(defn add-node-op
+  "Takes a Membership state and returns an op (if possible) for
+  adding a node to the cluster."
+  [{:keys [view free] :as membership}]
+  (when-let [node (-> free vec rand-nth-empty)]
+    {:type  :info
+     :f     :add-node,
+     :value {:add node
+             :seed (rand-nth (active-nodes membership))}}))
+
+(defn unregister-node-op
   "Takes a membership state and returns an operation for unregistering a node
   as a validator."
   [{:keys [validators view]}]
@@ -102,6 +119,8 @@
   membership/State
   (setup! [this test]
     (assoc this
+           ; We're going to need the node set frequently
+           :nodes      (:nodes test)
            ; Initially, every node is a validator.
            :validators (set (:nodes test))
            ; Keep a client for each node.
@@ -118,9 +137,10 @@
         {:validators (->> validators
                           (mapv (fn [validator]
                                   (assoc validator :node
-                                         (db/validator-address->node (:db test)
+                                         (rdb/validator-address->node (:db test)
                                                                      (:address validator))))))
-         :validation-info (db/validation-node-info node)})
+         ;:validation-info (rdb/validation-node-info node)
+         })
       (catch [:type :radix-dlt/failure, :code 1604] e
         ; Parse error
         nil)))
@@ -136,6 +156,7 @@
      ; distinct node. No way to get a causal timestamp here, far as I know:
      ; we're just gonna be wrong sometimes.
      :validators (->> (vals node-views)
+                      (mapcat :validators)
                       (group-by :node)
                       vals
                       (mapv first))})
@@ -143,12 +164,17 @@
   (fs [this]
     #{:stake
       :unstake
+      :add-node
       :remove-node})
 
   (op [this test]
-    (or (stake-op this)
-        (remove-node-op this)
-        :pending))
+    (->> [(stake-op this)
+          (add-node-op this)
+          (remove-node-op this)
+          :pending]
+         (remove nil?)
+         vec
+         rand-nth))
 
   (invoke! [this test {:keys [f value] :as op}]
     (case f
@@ -165,13 +191,32 @@
         ; Await txn
         (update op :value assoc
                 :txn-id (:id txn')
-                :status @(:status txn')))))
+                :status @(:status txn')))
+
+      ; We're doing something simple and maybe unsafe (?): just killing and
+      ; wiping the node.
+      :remove-node
+      (do (c/on-nodes test [value]
+                      (fn [test node]
+                        (db/kill! (:db test) test node)
+                        (rdb/wipe!)))
+          (assoc op :value [:removed value]))))
 
   (resolve [this test]
     this)
 
   (resolve-op [this test [op op']]
-    nil)
+    ;(info :resolve-op :op op :op' op')
+    (case (:f op)
+      ; We assume removes take place immediately.
+      :remove-node
+      (if (= :removed (first (:value op')))
+        ; Record that this node is now free
+        (update this :free conj (:value op))
+        (throw+ {:type :unexpected-remove-node-value
+                 :op op'}))
+
+      nil))
 
   (teardown! [this test]
     ; No way to actually close clients, I think.
@@ -187,6 +232,7 @@
                                  {:free #{}
                                   })
                         :log-node-views? false
+                        :log-resolve? true
                         :log-view? true})))
 
 (defn rollback-package

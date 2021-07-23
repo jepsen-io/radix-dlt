@@ -425,6 +425,12 @@ export RADIXDLT_STAKER_1_PRIVKEY=p7vk1dMv5A0agIbcgB6TWdhKnyunAJTFW9bK6ZiSCHg=
                  :res  res
                  :node node})))
 
+(defn wipe!
+  "Deletes all data & config files (but not logs)"
+  []
+  (c/su
+    (c/exec :rm :-rf (str dir "/data") (str dir "/default.config"))))
+
 (defn validator-address->node
   "Takes a DB and string representation of a validator address (e.g.
   vb1qwyxnktxunxsvav0ac769m52tagzwy66kckzu8eftl0mew4pnpfj7zzrdty) and converts
