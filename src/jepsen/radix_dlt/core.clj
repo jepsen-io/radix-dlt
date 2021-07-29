@@ -103,7 +103,7 @@
     :validate [(partial every? partition-targets) (cli/one-of partition-targets)]]
 
    [nil "--radix-git-version COMMIT" "What commit from radix-dlt should we check out?"
-    :default "09e06232ac26e51faf567bc0af7324341508ddfc"]
+    :default "1.0-beta.40"]
 
    [nil "--recovery-time SECONDS" "How long should we wait for cluster recovery before final reads?"
     :default 10]
@@ -118,7 +118,7 @@
     :parse-fn parse-long]
 
    [nil "--version VERSION" "RadixDLT version (from https://github.com/radixdlt/radixdlt/releases)"
-    :default "1.0-beta.35.1"]
+    :default "1.0-beta.40"]
 
    [nil "--nemesis FAULTS" "A comma-separated list of nemesis faults to enable"
     :parse-fn parse-nemesis-spec

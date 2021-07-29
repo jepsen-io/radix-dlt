@@ -1,6 +1,6 @@
 # jepsen.radix-dlt
 
-A Clojure library designed to ... well, that part is up to you.
+Jepsen tests for the Radix distributed ledger system.
 
 ## Installation
 
@@ -8,26 +8,27 @@ In addition to a Jepsen environment, you'll need a RadixDLT client.
 
 ```
 git clone https://github.com/radixdlt/radixdlt.git
-cd radix-dlt/radixdlt-java/radixdlt-java
-git checkout release/1.0-beta.35
-echo "apply plugin: 'maven'" >> build.gradle
-../../gradlew install
+git checkout release/1.0-beta.40
 ```
 
-Likewise, radix-engine:
+Compile and install each part of the client library. This apparently only builds with JDK 11, so you'll need to downgrade, compile, then flip back.
 
 ```
-cd ../../radixdlt-engine
+cd radixdlt-engine
 echo "apply plugin: 'maven'" >> build.gradle
 ../gradlew install
 ```
-
-And radixdlt-java-common
 
 ```
 cd ../radixdlt-java-common/
 echo "apply plugin: 'maven'" >> build.gradle
 ../gradlew install
+```
+
+```
+cd ../radixdlt-java/radixdlt-java
+echo "apply plugin: 'maven'" >> build.gradle
+../../gradlew install
 ```
 
 ## Usage

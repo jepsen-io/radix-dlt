@@ -43,7 +43,7 @@
       accounts
       {:id        id
        :key-pair  key-pair
-       :address   (rc/key-pair->account-address key-pair)})))
+       :address   (rc/->account-address key-pair)})))
 
 (defn id->address
   "Converts an ID to an address, given an accounts structure."
@@ -81,7 +81,7 @@
                 accounts
                 {:id        id
                  :key-pair  key-pair
-                 :address   (rc/key-pair->account-address key-pair)})))
+                 :address   (rc/->account-address key-pair)})))
           (accounts)
           u/default-account-ids))
 

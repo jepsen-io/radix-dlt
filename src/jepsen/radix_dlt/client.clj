@@ -12,30 +12,31 @@
            (com.radixdlt.client.lib.api AccountAddress
                                         ActionType
                                         NavigationCursor
-                                        RadixApi
                                         TransactionRequest
                                         TransactionRequest$TransactionRequestBuilder
                                         TxTimestamp
                                         ValidatorAddress)
-           (com.radixdlt.client.lib.dto ActionDTO
-                                        BalanceDTO
-                                        BuiltTransactionDTO
+           (com.radixdlt.client.lib.api.sync RadixApi)
+           (com.radixdlt.client.lib.dto Action
+                                        Balance
+                                        BuiltTransaction
                                         FinalizedTransaction
-                                        NetworkIdDTO
-                                        TokenBalancesDTO
-                                        TokenInfoDTO
+                                        NetworkId
+                                        TokenBalances
+                                        TokenInfo
                                         TransactionDTO
-                                        TransactionHistoryDTO
+                                        TransactionHistory
                                         TransactionStatus
                                         TransactionStatusDTO
+                                        TxBlobDTO
                                         TxDTO
-                                        ValidatorsResponseDTO
+                                        ValidatorsResponse
                                         ValidatorDTO)
-           (com.radixdlt.client.lib.impl SynchronousRadixApiClient)
            (com.radixdlt.client.lib.network HttpClients)
            (com.radixdlt.crypto ECKeyPair
                                 ECPublicKey)
-           (com.radixdlt.identifiers AID)
+           (com.radixdlt.identifiers AID
+                                     AccountAddressing)
            (com.radixdlt.utils Ints
                                UInt256)
            (com.radixdlt.utils.functional Failure
@@ -45,11 +46,13 @@
            (java.util.function Function)
            (org.bouncycastle.util.encoders Hex)))
 
+(def network-id 99)
+
 (defprotocol ToClj
   "Transforms RadixDLT client types into Clojure structures."
   (->clj [x]))
 
-(def-derived-map ActionMap [^ActionDTO a]
+(def-derived-map ActionMap [^Action a]
   :type       (->clj (.getType a))
   :from       (->clj (.getFrom a))
   :to         (->clj (.getTo a))
@@ -57,7 +60,7 @@
   :amount     (->clj (.getAmount a))
   :rri        (->clj (.getRri a)))
 
-(def-derived-map TokenInfoMap [^TokenInfoDTO t]
+(def-derived-map TokenInfoMap [^TokenInfo t]
   :name            (.getName t)
   :rri             (.getRri t)
   :symbol          (.getSymbol t)
@@ -100,7 +103,7 @@
   (->clj [x]
     (.toString x))
 
-  ActionDTO
+  Action
   (->clj [x] (->ActionMap x))
 
   ActionType
@@ -117,7 +120,7 @@
   (->clj [x]
     (.toString x))
 
-  BalanceDTO
+  Balance
   (->clj [x]
     {:rri     (.getRri x)
      :amount  (->clj (.getAmount x))})
@@ -130,7 +133,7 @@
      :message (.message x)
      :code    (.code x)})
 
-  NetworkIdDTO
+  NetworkId
   (->clj [x]
     (.getNetworkId x))
 
@@ -140,15 +143,15 @@
   Result
   (->clj [x] (->clj (unres x)))
 
-  TokenBalancesDTO
+  TokenBalances
   (->clj [x]
     {:owner     (->clj (.getOwner x))
      :balances  (map ->clj (.getTokenBalances x))})
 
-  TokenInfoDTO
+  TokenInfo
   (->clj [x] (->TokenInfoMap x))
 
-  TransactionHistoryDTO
+  TransactionHistory
   (->clj [x]
     {:cursor (.orElse (.getCursor x) nil)
      :txns   (map ->clj (.getTransactions x))})
@@ -189,7 +192,7 @@
   ValidatorDTO
   (->clj [x] (->ValidatorMap x))
 
-  ValidatorsResponseDTO
+  ValidatorsResponse
   (->clj [x]
     {:cursor (.orElse (.getCursor x) nil)
      :validators (map ->clj (.getValidators x))})
@@ -232,16 +235,11 @@
   [^ECKeyPair key-pair]
   (.getPublicKey key-pair))
 
-(defn ^AccountAddress key-pair->account-address
-  "Turns an ECKeyPair into an AccountAddress."
-  [^ECKeyPair key-pair]
-  (AccountAddress/create (public-key key-pair)))
-
 (defn private-key-str->key-pair
   "Converts a private key string (e.g.
   ZCpcCF2EhnPBt774Y6UTZ5qSaIiPhfkBmr1zw9ZtklA=; a base64-encoded string from
   the generated universe) to an ECKeyPair."
-  [base64-str]
+  [^String base64-str]
   (-> (Base64/getDecoder)
       (.decode base64-str)
       ECKeyPair/fromPrivateKey))
@@ -252,10 +250,16 @@
   AccountAddress
   (->account-address [x] x)
 
+  ECKeyPair
+  (->account-address [x]
+    (AccountAddress/create (public-key x)))
+
   String
   (->account-address [x]
-    (let [readdr (com.radixdlt.identifiers.AccountAddress/parse x)]
-      (AccountAddress. readdr))))
+    (let [readdr (-> (com.radixdlt.networks.Addressing/ofNetworkId network-id)
+                     .forAccounts
+                     (.parse x))]
+      (AccountAddress/create readdr))))
 
 (defprotocol ToValidatorAddress
   (->validator-address [x] "Converts something to a ValidatorAddress"))
@@ -266,16 +270,13 @@
 
   String
   (->validator-address [s]
-    (ValidatorAddress/create s))
+    (-> (com.radixdlt.networks.Addressing/ofNetworkId network-id)
+        .forValidators
+        (.parse s)
+        ->validator-address))
 
   ECPublicKey
-  (->validator-address [k]
-    ; ValidatorAddress literally exists to wrap an ECPublicKey, but we can't
-    ; actually CONSTRUCT one because the constructor is private; it wants us to
-    ; go through a string. No, it's not clear what that string should be; I'm
-    ; guessing here based on the definition of ValidatorAddress.toString, which
-    ; goes through com.radixdlt.identifiers.ValidatorAddress/of.
-    (-> k com.radixdlt.identifiers.ValidatorAddress/of ->validator-address))
+  (->validator-address [k] (ValidatorAddress/of k))
 
   ECKeyPair
   (->validator-address [kp]
@@ -305,44 +306,38 @@
     clojure.lang.BigInt (UInt256/from (str n))
     Long                (UInt256/from ^long n)))
 
-(defn ^SynchronousRadixApiClient open
+(defn ^RadixApi open
   "Opens a connection to a node."
   [node]
-  (->clj (SynchronousRadixApiClient/connect
-           (str "https://" node)
-           (HttpClients/getSslAllTrustingClient))))
-
-(defn address
-  "Constructs a RadixAddress."
-  [^RadixApi client]
-  (unres (.getAddress client)))
+  (->clj (RadixApi/connect
+           (str "http://" node))))
+           ;(HttpClients/getSslAllTrustingClient))))
 
 ;; API operations
 
 (defn native-token
   "Gets the native token of this client."
   [^RadixApi client]
-  (->clj (.nativeToken client)))
+  (-> client .token .describeNative ->clj))
 
 (defn network-id
   "Returns the Network ID of this client."
   [^RadixApi client]
-  [client]
-  (->clj (.networkId client)))
+  (-> client .network .id ->clj))
 
 (defn token-balances
   "Looks up the token balances of a given address."
   [^RadixApi client ^AccountAddress address]
-  (->clj (.tokenBalances client address)))
+  (-> client .account (.balances address) ->clj))
 
-(defn txn-request
-  "Builds a new transaction request. Takes a message string and a seq of
-  actions of the form...
+(defn ^TransactionRequest txn-request
+  "Builds a new transaction request. Takes a from account address, a message
+  string and a seq of actions of the form...
 
     [[:transfer from to amount rri]
      [:stake from validator amount]
      [:unstake from validator amount]]"
-  [message actions]
+  [from message actions]
   (.build ^TransactionRequest$TransactionRequestBuilder
     (reduce (fn [^TransactionRequest$TransactionRequestBuilder builder action]
               (case (first action)
@@ -359,34 +354,42 @@
                             (.unstake builder from
                                       (->validator-address validator)
                                       (uint256 amount)))))
-            (.. (TransactionRequest/createBuilder)
+            (.. (TransactionRequest/createBuilder (->account-address from))
                 (message (str message)))
             actions)))
 
-(defn build-txn
-  "Constructs a transaction from a message and actions. See
+(defn ^BuiltTransaction build-txn
+  "Constructs a transaction from a from account, message, and actions. See
   `transaction-request`."
-  [^RadixApi client message actions]
-  (unres (.buildTransaction client (txn-request message actions))))
+  [^RadixApi client from message actions]
+  (-> client
+      .transaction
+      (.build (txn-request from message actions))
+      unres))
 
 (defn ^FinalizedTransaction local-finalize-txn
-  "Takes a BuiltTransactionDTO and finalizes it with a given key pair."
-  [^BuiltTransactionDTO txn ^ECKeyPair key-pair]
+  "Takes a BuiltTransaction and finalizes it with a given key pair."
+  [^BuiltTransaction txn ^ECKeyPair key-pair]
   (.toFinalized txn key-pair))
 
-(defn ^TxDTO remote-finalize-txn
+(defn ^TxBlobDTO remote-finalize-txn
   "Takes a 'finalized' transaction and sends it to the server for... even more
   finalizing? Returns a map."
   [^RadixApi client ^FinalizedTransaction txn]
-  (unres (.finalizeTransaction client txn)))
+  (-> client
+      .transaction
+      (.finalize txn false)
+      unres))
 
-(defn ^FinalizedTransaction finalize-txn
+(defn ^TxBlobDTO finalize-txn
   "Takes a built txn and finalizes it using the given keypair. Obtains a txid
   from the server, and returns the FinalizedTransaction, ID and all."
-  [^RadixApi client built-txn key-pair]
-  (let [finalized (local-finalize-txn built-txn key-pair)
-        txid      (.getTxId (remote-finalize-txn client finalized))]
-    (.withTxId finalized txid)))
+  [^RadixApi client ^BuiltTransaction built-txn key-pair]
+  (let [local  (local-finalize-txn built-txn key-pair)
+        remote (remote-finalize-txn client local)]
+;        txid      (.getTxId (remote-finalize-txn client finalized))]
+;    (.withTxId finalized txid)))
+    remote))
 
 (defn txn-status
   "Checks the status of a transaction. Transaction IDs can be given either as
@@ -396,7 +399,8 @@
      :status :confirmed, :pending, or :failed}"
   [^RadixApi client txid]
   (-> client
-      (.statusOfTransaction (->aid txid))
+      .transaction
+      (.status (->aid txid))
       ->clj))
 
 (defn await-txn
@@ -433,7 +437,7 @@
 
 ; Clojure's going to want to be nice and deref this when printing, which is a
 ; tad inconvenient.
-(defmethod print-method TxnStatus [ts writer]
+(defmethod print-method TxnStatus [ts ^java.io.Writer writer]
   (.write writer (str ts)))
 
 (defn submit-txn!
@@ -441,8 +445,8 @@
 
     {:id      tx-id, as a string
      :status  A deref-able of the eventual status of the transaction.}"
-  [^RadixApi client ^FinalizedTransaction txn]
-  (let [tx (unres (.submitTransaction client txn))
+  [^RadixApi client ^TxBlobDTO txn]
+  (let [^TxDTO tx (-> client .transaction (.submit txn) unres)
         id (.getTxId tx)]
     {:id     (->clj id)
      :status (TxnStatus. client id)}))
@@ -473,7 +477,7 @@
     {:id      tx-id
      :status  A deref-able which checks the eventual status of the transaction}"
   [^RadixApi client key-pair message actions]
-  (as-> (build-txn client message actions) txn
+  (as-> (build-txn client key-pair message actions) txn
         (finalize-txn client txn key-pair)
         (submit-txn! client txn)))
 
@@ -490,7 +494,7 @@
      (let [c (->clj (chunk (Optional/empty)))]
        (concat (results c)
                (paginated chunk results (:cursor c))))))
-  ([chunk results cursor]
+  ([chunk results ^NavigationCursor cursor]
    ; Without a cursor, we're at the end of the sequence
    (when (and cursor
               ; It looks like they signal the end with an empty string value?
@@ -512,7 +516,7 @@
    (txn-history client address history-chunk-size))
   ([^RadixApi client address size]
    (paginated (fn chunk [cursor]
-                (.transactionHistory client address size cursor))
+                (-> client .account (.history address size cursor)))
               :txns)))
 
 (def validator-chunk-size
@@ -522,7 +526,8 @@
 (defn validators
   "Takes a Radix Client and returns a lazy seq of validator states."
   [^RadixApi client]
-  (paginated (fn chunk [cursor] (.validators client validator-chunk-size cursor))
+  (paginated (fn chunk [cursor]
+               (-> client .validator (.list validator-chunk-size cursor)))
              :validators))
 
 (defn await-initial-convergence
@@ -538,8 +543,8 @@
     ; any initial balance-changing transactions to factor into account.
     (let [k1 (key-pair 5)
           k2 (key-pair 5)
-          addr1 (key-pair->account-address k1)
-          addr2 (key-pair->account-address k2)
+          addr1 (->account-address k1)
+          addr2 (->account-address k2)
           ; Before the API is ready, we'll get HTML error pages from nginx
           ; instead of the JSON the client expects.
           rri   (util/await-fn

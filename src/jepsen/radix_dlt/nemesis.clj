@@ -185,7 +185,7 @@
                          (rc/txn! key-pair
                                   "nemesis stake"
                                   [[:stake
-                                    (rc/key-pair->account-address key-pair)
+                                    (rc/->account-address key-pair)
                                     (:validator value)
                                     (:amount value)]]))]
         ; Await txn

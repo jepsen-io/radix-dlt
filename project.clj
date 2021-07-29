@@ -10,7 +10,7 @@
                                com.fasterxml.jackson.dataformat/jackson-dataformat-cbor]]
                  [clj-http "3.12.0"
                   :exclusions [commons-codec]]
-                 [com.radixdlt/radixdlt-java "1.0-beta.35.1-release~1.0-beta.35-SNAPSHOT"]
+                 [com.radixdlt/radixdlt-java "1.0-beta.40-release~1.0-beta.40-SNAPSHOT"]
                  [jepsen/jepsen "0.2.5-SNAPSHOT"
                   :exclusions [com.fasterxml.jackson.core/jackson-core]]
                  [mvxcvi/clj-cbor "1.1.0"]

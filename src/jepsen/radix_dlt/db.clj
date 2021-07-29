@@ -24,6 +24,10 @@
 (def node-api-port 3334)
 (def client-api-port 8081)
 
+(def network-id
+  "This is what radixdlt-core/docker/Dockerfile.core uses"
+  99)
+
 (def dir
   "Where do we install Radix stuff?"
   "/opt/radix")
@@ -81,7 +85,7 @@
     i))
 
 (defn upgrade-to-bullseye!
-  "Upgrades Debian Bustebr to Bullseye.
+  "Upgrades Debian Buster to Bullseye.
 
   Radixnode is built against glibc 2.29, and Buster uses 2.28. Pyinstaller's
   binaries don't package glibc
@@ -150,8 +154,6 @@
 export RADIXDLT_VALIDATOR_0_PRIVKEY=kMbmxZri+FCC0ktmWbwJ/zJVFPXjRgaRHmDBmE3L+b0=
 export RADIXDLT_VALIDATOR_1_PRIVKEY=p7vk1dMv5A0agIbcgB6TWdhKnyunAJTFW9bK6ZiSCHg=
 export RADIXDLT_VALIDATOR_2_PRIVKEY=UCZRvnk5Jm9hEbpiingYsx7tbjf3ASNLHDf3BLmFaps=
-export RADIXDLT_STAKER_0_PRIVKEY=kMbmxZri+FCC0ktmWbwJ/zJVFPXjRgaRHmDBmE3L+b0=
-export RADIXDLT_STAKER_1_PRIVKEY=p7vk1dMv5A0agIbcgB6TWdhKnyunAJTFW9bK6ZiSCHg=
 
   and returns a parsed Clojure structure--see gen-universe for details."
   [exports]
@@ -162,20 +164,8 @@ export RADIXDLT_STAKER_1_PRIVKEY=p7vk1dMv5A0agIbcgB6TWdhKnyunAJTFW9bK6ZiSCHg=
                  (let [[match k v] (re-find #"export RADIXDLT_(\w+)=(.*)"
                                             line)]
                    ;(info :k k :v v)
-                   (cond (= k "UNIVERSE")
-                         ; This is stored as base64-encoded CBOR
-                         (assoc u
-                                :universe-str v
-                         ;       :universe     (-> (Base64/getDecoder)
-                         ;                         (.decode v)
-                         ;                         cbor/decode)
-                         )
-
-                         (= k "UNIVERSE_TYPE")
-                         (assoc u :universe-type (keyword (.toLowerCase v)))
-
-                         (= k "UNIVERSE_TOKEN")
-                         (assoc u :universe-token v)
+                   (cond (= k "GENESIS_TXN")
+                         (assoc u :genesis-txn v)
 
                          :else
                          ; something like RADIXDLT_VALIDATOR_0_PRIVKEY
@@ -187,18 +177,28 @@ export RADIXDLT_STAKER_1_PRIVKEY=p7vk1dMv5A0agIbcgB6TWdhKnyunAJTFW9bK6ZiSCHg=
                                       (keyword (.toLowerCase subkey))]
                                      v)
                            ; Dunno!
-                           [k v]))))
+                           (assoc u (keyword k) v)))))
                {:stakers    []
                 :validators []})))
+
+(defn validate-universe-exports
+  "Ensures that a parsed universe exports map has the right structure"
+  [exports]
+  (info :exports (pprint-str exports))
+  (assert (map? exports))
+  (let [{:keys [validators
+                genesis-txn]} exports]
+    (assert (string? genesis-txn))
+    (doseq [v validators]
+      (assert (string? (:privkey v)))
+      (assert (string? (:pubkey v)))))
+  exports)
 
 (defn gen-universe
   "Generates an initial universe. Returns a map of:
 
     {:validators      [{:privkey \"...\"} ...]
-     :stakers         [{:privkey \"...\"} ...]
-     :universe-str    \"base64 encoded cbor string\"
-     :universe-type   :DEVELOPMENT
-     :universe-token  \"xrd_rb...\"}"
+     :genesis-txn     \"hex string\"}"
   [test]
   (info "Generating universe")
   (c/su
@@ -220,7 +220,9 @@ export RADIXDLT_STAKER_1_PRIVKEY=p7vk1dMv5A0agIbcgB6TWdhKnyunAJTFW9bK6ZiSCHg=
                             ":radixdlt:clean"
                             ":radixdlt:generateDevUniverse")]
             ;(info "dev universe:\n" out)
-            (parse-universe-exports out)))))
+            (-> out
+                parse-universe-exports
+                validate-universe-exports)))))
 
 (defn get-universe
   "Returns a cached universe, or generates a new one."
@@ -246,7 +248,6 @@ export RADIXDLT_STAKER_1_PRIVKEY=p7vk1dMv5A0agIbcgB6TWdhKnyunAJTFW9bK6ZiSCHg=
   {:JAVA_OPTS "-server -Xms3g -Xmx3g -XX:+HeapDumpOnOutOfMemoryError -Djavax.net.ssl.trustStore=/etc/ssl/certs/java/cacerts -Djavax.net.ssl.trustStoreType=jks -Djava.security.egd=file:/dev/urandom -DLog4jContextSelector=org.apache.logging.log4j.core.async.AsyncLoggerContextSelector"
    :RADIX_NODE_KEYSTORE_PASSWORD password
    :RADIXDLT_UNIVERSE_ENABLE true
-   :RADIXDLT_UNIVERSE (:universe-str universe)
    :RADIXDLT_NODE_KEY (dt/assert+
                         (get-in universe
                                 [:validators
@@ -261,28 +262,41 @@ export RADIXDLT_STAKER_1_PRIVKEY=p7vk1dMv5A0agIbcgB6TWdhKnyunAJTFW9bK6ZiSCHg=
   "The configuration map for a node."
   [test node universe]
   (cond-> {:ntp                        false
-           :ntp.pool                   "pool.ntp.org"
-           ; We pass in the universe via env vars
-           ; :universe.location          universe-file
-           ; Likewise, we pass this in via env
-           ; :node.key.path              keystore
-           :network.tcp.listen_port    listen-port
-           :network.tcp.broadcast_port broadcast-port
+           :network.id                 network-id
+           :network.genesis_txn        (:genesis-txn universe)
+           :network.p2p.default_port   listen-port
+           :network.p2p.listen_port    listen-port
+           :network.p2p.broadcast_port broadcast-port
+           :cp.port                    client-api-port
+           :api.node.port              node-api-port
            ; The docs (https://docs.radixdlt.com/main/radix-nodes/running-a-full-node-standalone.html#_configuration) say to use host.ip, but the example config file (https://github.com/radixdlt/radixdlt/blob/ba7a42999d82a71696209e275c53cb99c6916114/radixdlt-core/radixdlt/src/main/resources/default.config#L95) says network.host_ip; maybe we need to change this?
-           :host.ip                    (cn/local-ip)
            :network.host_ip            (cn/local-ip)
            :db.location                data-dir
-           :node_api.port              node-api-port
-           :client_api.enable          true
-           :client_api.port            client-api-port
+           :api.account.enable         true
+           :api.archive.enable         true
+           :api.health.enable          true
+           :api.system.enable          true
+           :api.construction.enable    true
            :log.level                  "debug"
-           :universe                   (:universe-str universe)
 
            ; Timeout tuning. Our goal is to reduce the time it takes for
            ; initial cluster convergence, and to speed recovery from faults.
            ; See radixdlt-core/radixdlt/src/main/resources/default.config for
            ; documentation. I'm using grep -r RuntimeProperties radixdlt-core/
            ; to find property names and defaults.
+
+           ; Specifies how often the discovery round is triggered (in
+           ; milliseconds). Default: 120000
+           :network.p2p.discovery_interval 10000
+
+           ; Specifies how often a ping message is sent. Default: 10000
+           :network.p2p.peer_liveness_check_interval 1000
+
+           ; A timeout for receiving a pong message. Default: 5000
+           :network.p2p.ping_timeout 500
+
+
+           ; Old parameters? They changed everything in 1.0-beta.39
 
            ; Time to wait for a connection to a discovery oracle to complete
            ; before abandoning the attempt, in milliseconds
@@ -328,8 +342,21 @@ export RADIXDLT_STAKER_1_PRIVKEY=p7vk1dMv5A0agIbcgB6TWdhKnyunAJTFW9bK6ZiSCHg=
            }
     ; All non-primary nodes get the primary as their seed
     (not= node (primary test))
-    (assoc :network.seeds (str (cn/ip (first (:nodes test)))
-                               ":" broadcast-port))))
+    (assoc :network.p2p.seed_nodes
+           (let [n (primary test)]
+             (str "radix://"
+                  (assert+
+                    (get-in universe
+                            [:validators
+                             (node-index test n)
+                             :pubkey])
+                    {:type :no-node-in-universe-validators
+                     :node node
+                     :validators (:validators universe)})
+                  "@"
+                  (cn/ip n)
+                  ":" broadcast-port
+                  )))))
 
 (defn config-str
   "The configuration file string for a node."
@@ -412,15 +439,18 @@ export RADIXDLT_STAKER_1_PRIVKEY=p7vk1dMv5A0agIbcgB6TWdhKnyunAJTFW9bK6ZiSCHg=
   (rpc! node "/validation" {:method :validation.get_node_info
                             :params []}))
 
-(defn await-node
-  "Blocks until we can fetch the /node JSON data"
+(defn await-health
+  "Blocks until we can fetch the /health JSON data"
   [node]
   (let [res (util/await-fn
-               (fn []
-                 (:body (http/get (str "https://" node "/node")
-                                  (admin-http-opts))))
-               {:log-message (str "Waiting for https://" node "/node")})]
-    (dt/assert+ (:address res)
+              (fn []
+                (let [res (:body (http/get (str "https://" node "/health")
+                                           (admin-http-opts)))]
+                  (when (= "BOOTING" (:status res))
+                    (throw+ {:type ::still-booting}))
+                  res))
+              {:log-message (str "Waiting for https://" node "/health")})]
+    (dt/assert+ (= "UP" (:status res))
                 {:type ::malformed-node-data?
                  :res  res
                  :node node})))
@@ -462,7 +492,7 @@ export RADIXDLT_STAKER_1_PRIVKEY=p7vk1dMv5A0agIbcgB6TWdhKnyunAJTFW9bK6ZiSCHg=
     (configure! test node @universe)
     (restart-nginx!)
     (db/start! this test node)
-    (await-node node)
+    (await-health node)
     ; Hack: even though the /node is ready, the client api might take
     ; longer, and we'll get weird parse errors when HTML shows up instead
     ; of JSON
@@ -491,7 +521,7 @@ export RADIXDLT_STAKER_1_PRIVKEY=p7vk1dMv5A0agIbcgB6TWdhKnyunAJTFW9bK6ZiSCHg=
                {:node     node
                 :key-pair key-pair
                 :address  (str (rc/->validator-address key-pair))})
-        (info :validators @validators)
+        ;(info :validators @validators)
         (cu/start-daemon!
           {:chdir   dir
            :logfile log-file
