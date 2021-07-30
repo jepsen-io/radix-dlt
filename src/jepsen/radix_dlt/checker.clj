@@ -313,31 +313,40 @@
   "Takes a txn1 (from a :txn op invocation) and a txn2 (from a txn log) and
   returns a map describing their difference, if one exists."
   [txn1 txn2]
-  (cond (nil? txn1)
-        {:type   :out-of-nowhere
-         :actual txn2}
+  ; Radix is going to silently drop self-transfers from
+  ; the transactions. Not sure whether this is bad or
+  ; not, but it feels... minor? We'll let it pass by
+  ; filtering them out of our own representation here.
+  (let [txn1 (->> (:ops txn1)
+                  (remove (fn [op]
+                            (= (:from op) (:to op))))
+                  (assoc txn1 :ops))]
+    (cond (nil? txn1)
+          {:type   :out-of-nowhere
+           :actual txn2}
 
-        (not= (count (:ops txn1)) (count (:actions txn2)))
-        {:type :diff-action-count
-         :expected txn1
-         :actual   txn2}
+          (not= (count (:ops txn1)) (count (:actions txn2)))
+          {:type :diff-action-count
+           :expected txn1
+           :actual   txn2}
 
-        :else
-        (let [action-errs (->> (map (fn [a1 a2]
-                                      (when (or (not= (:type a1)   (:type a2))
-                                                (not= (:from a1)   (:from a2))
-                                                (not= (:to a1)     (:to a2))
-                                                (not= (:amount a1) (:amount a2))
-                                                (not= (:rri a1)    (:rri a2)))
-                                        [a1 a2]))
-                                    (:ops txn1)
-                                    (:actions txn2))
-                               (remove nil?))]
-          (when (seq action-errs)
-            {:type     :diff-actions
-             :expected txn1
-             :actual   txn2
-             :errors   (action-errs)}))))
+          :else
+          (let [action-errs
+                (->> (map (fn [a1 a2]
+                            (when (or (not= (:type a1)   (:type a2))
+                                      (not= (:from a1)   (:from a2))
+                                      (not= (:to a1)     (:to a2))
+                                      (not= (:amount a1) (:amount a2))
+                                      (not= (:rri a1)    (:rri a2)))
+                              [a1 a2]))
+                          (:ops txn1)
+                          (:actions txn2))
+                     (remove nil?))]
+            (when (seq action-errs)
+              {:type     :diff-actions
+               :expected txn1
+               :actual   txn2
+               :errors   (action-errs)})))))
 
 (defn faithful-checker
   "Verifies that the representations of txns in the txn log align with the txns

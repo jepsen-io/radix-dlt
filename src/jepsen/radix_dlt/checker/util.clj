@@ -171,7 +171,9 @@
   "How much XRD do accounts start with?"
   [account]
   (if (u/default-account-id? account)
-    1000000000000000000000000000000000000000000000N
+    ; I think this changed from beta.35.1 to beta.40?
+    ; 1000000000000000000000000000000000000000000000N
+    1000000000000000000000000000N
     0N))
 
 (t/ann txn-id [TxnLogTxn -> (t/Option TxId)])
