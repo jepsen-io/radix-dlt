@@ -61,7 +61,9 @@
            opts
            {:os               debian/os
             :db               db
-            :name             (str "radix " (pr-str (:nemesis opts)))
+            :name             (str "radix "
+                                   (:version opts) " "
+                                   (pr-str (:nemesis opts)))
             :pure-generators  true
             :client           (:client workload)
             :nemesis          (:nemesis nemesis)
@@ -94,16 +96,10 @@
     :parse-fn parse-comma-kws
     :validate [(partial every? db-targets) (cli/one-of db-targets)]]
 
-   [nil "--node-runner-version VERSION-STRING" "Which version of https://github.com/radixdlt/node-runner/releases should we use to install Radix?"
-    :default "1.0-beta.35.1"]
-
    [nil "--partition-targets TARGETS" "A comma-separated list of nodes to target for network partitions; e.g. one,all"
     :default [:minority-third :majorities-ring]
     :parse-fn parse-comma-kws
     :validate [(partial every? partition-targets) (cli/one-of partition-targets)]]
-
-   [nil "--radix-git-version COMMIT" "What commit from radix-dlt should we check out?"
-    :default "1.0-beta.40"]
 
    [nil "--recovery-time SECONDS" "How long should we wait for cluster recovery before final reads?"
     :default 10]
@@ -117,8 +113,8 @@
     :default  5
     :parse-fn parse-long]
 
-   [nil "--version VERSION" "RadixDLT version (from https://github.com/radixdlt/radixdlt/releases)"
-    :default "1.0-beta.40"]
+   [nil "--version VERSION" "RadixDLT version (from https://github.com/radixdlt/radixdlt/releases); should also be a git tag"
+    :default "1.0.0"]
 
    [nil "--nemesis FAULTS" "A comma-separated list of nemesis faults to enable"
     :parse-fn parse-nemesis-spec

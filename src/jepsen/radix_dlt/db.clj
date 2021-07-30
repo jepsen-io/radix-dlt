@@ -84,40 +84,6 @@
     (assert (not (neg? i)))
     i))
 
-(defn upgrade-to-bullseye!
-  "Upgrades Debian Buster to Bullseye.
-
-  Radixnode is built against glibc 2.29, and Buster uses 2.28. Pyinstaller's
-  binaries don't package glibc
-  (https://pyinstaller.readthedocs.io/en/stable/usage.html?highlight=glibc#making-gnu-linux-apps-forward-compatible),
-  so we need to bump nodes to Bullseye, which has glibc 2.31. We're scripting
-  this so that Radix (and third parties) can run it on existing Buster
-  clusters, which is what's packaged on AWS."
-  []
-  (when (re-find #"Debian GNU/Linux 10" (c/exec :cat "/etc/issue"))
-    (info "Upgrading Debian Buster to Bullseye")
-    (c/su
-      (c/exec :sed :-i "s/buster/bullseye/g" "/etc/apt/sources.list")
-      ; Comment out security sources, since they're not available for testing
-      (c/exec :sed :-i :-e "/security/ s/^#*/#/" "/etc/apt/sources.list")
-      (debian/update!)
-      (c/exec :env "DEBIAN_FRONTEND=noninteractive" :apt :upgrade :-y)
-      (c/exec :env "DEBIAN_FRONTEND=noninteractive" :apt :full-upgrade :-y))))
-
-(defn install-radixnode!
-  "Downloads and installs the radixnode script"
-  [test]
-  (info "Installing Radix")
-  (c/su
-    (c/exec :mkdir :-p dir)
-    (c/cd dir
-          (let [script   "radixnode-ubuntu-20.04"
-                url (str "https://github.com/radixdlt/node-runner/releases/download/"
-                         (:node-runner-version test) "/" script)]
-            (cu/wget! url)
-            (c/exec :mv script radixnode)
-            (c/exec :chmod :+x radixnode)))))
-
 (defn install-radix!
   "Installs Radix directly."
   [test]
@@ -210,7 +176,7 @@ export RADIXDLT_VALIDATOR_2_PRIVKEY=UCZRvnk5Jm9hEbpiingYsx7tbjf3ASNLHDf3BLmFaps=
     (c/cd radix-git-dir
           ; Check out our specific version
           (c/exec :git :fetch)
-          (c/exec :git :reset :--hard (:radix-git-version test))
+          (c/exec :git :reset :--hard (:version test))
           (c/exec :git :clean :-fdx)
 
           ; Use Gradle to build a dev universe
@@ -227,7 +193,7 @@ export RADIXDLT_VALIDATOR_2_PRIVKEY=UCZRvnk5Jm9hEbpiingYsx7tbjf3ASNLHDf3BLmFaps=
 (defn get-universe
   "Returns a cached universe, or generates a new one."
   [test]
-  (let [path [:radixdlt :universe]]
+  (let [path [:radixdlt (:version test) :universe]]
     (cache/locking path
       (or (cache/load-edn path)
           (cache/save-edn! (gen-universe test) path)))))
