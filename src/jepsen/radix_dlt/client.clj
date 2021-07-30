@@ -451,6 +451,20 @@
     {:id     (->clj id)
      :status (TxnStatus. client id)}))
 
+(defn prep-txn
+  "Prepares, but does not submit, a transaction. Phase 1, 2, 3, 4, and 5 of
+  txn! Returns a map of
+
+    {:id        The ID of this txn
+     :fee       The fee for this txn
+     :finalized TxBlobDTO, which can be submitted via submit-txn!}"
+  [^RadixApi client key-pair message actions]
+  (let [built     (build-txn client key-pair message actions)
+        finalized (finalize-txn client built key-pair)]
+    {:id          (->clj (.getTxId finalized))
+     :fee         (->clj (.getFee built))
+     :finalized   finalized}))
+
 (defn txn!
   "So the transaction flow here is:
 
@@ -477,9 +491,8 @@
     {:id      tx-id
      :status  A deref-able which checks the eventual status of the transaction}"
   [^RadixApi client key-pair message actions]
-  (as-> (build-txn client key-pair message actions) txn
-        (finalize-txn client txn key-pair)
-        (submit-txn! client txn)))
+  (let [prepped (prep-txn client key-pair message actions)]
+    (submit-txn! client (:finalized prepped))))
 
 (defn paginated
   "Takes a function (chunk cursor), where cursor is an Optional<Cursor>, where

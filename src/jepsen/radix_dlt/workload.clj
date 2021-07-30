@@ -1,7 +1,7 @@
 (ns jepsen.radix-dlt.workload
   "A generator, client, and checker for RadixDLT"
   (:require [clojure.tools.logging :refer [info warn]]
-            [dom-top.core :refer [assert+]]
+            [dom-top.core :refer [assert+ letr]]
             [jepsen [checker :as checker]
                     [client :as client]
                     [generator :as gen]
@@ -91,6 +91,9 @@
   `(try+ ~@body
          (catch [:type :timeout] e#
            (assoc ~op :type :info, :error :timeout))
+         (catch [:type :txn-prep-failed] e#
+           (assoc ~op :type :fail
+                  :error [:txn-prep-failed (.getMessage (:cause ~'&throw-context))]))
          (catch [:type :radix-dlt/failure, :code 1500] e#
            (assoc ~op :type :fail, :error [:substate-not-found
                                            (:message e#)]))
@@ -99,6 +102,43 @@
          (catch [:type :radix-dlt/failure, :code 2515] e#
            (assoc ~op :type :fail, :error :insufficient-balance))))
 
+(defn txn!
+  "Takes a client, an accounts map, and a :txn op. Executes the txn op and
+  constructs a resulting op."
+  [client accounts op]
+  (letr [value (:value op)
+         ; Map account IDs to addresses and add the token RRI to each op.
+         ops (map (fn [{:keys [type] :as op}]
+                    (case type
+                      :transfer (let [{:keys [from to amount rri]} op]
+                                  [type
+                                   (id->address @accounts from)
+                                   (id->address @accounts to)
+                                   amount
+                                   rri])))
+                  (:ops value))
+         ; Prepare txn. This gives us the txid and fee, which we're going
+         ; to need if we crash.
+         txn (try+ (rc/prep-txn client (id->key-pair @accounts (:from value))
+                                (str "t" (:id value))
+                                ops)
+                   (catch [:type :timeout] e
+                     (throw+ {:type :txn-prep-failed}))
+                   (catch [:type :radix-dlt/failure] e
+                     (throw+ {:type :txn-prep-failed})))
+         op' (update op :value
+                     assoc
+                     :txn-id (:id txn)
+                     :fee    (:fee txn))]
+    ; Submit txn. We wrap this with another with-errors, so that we can
+    ; return a info/fail op with a fee and txn-id.
+    (with-errors op'
+      (let [txn'   (rc/submit-txn! client (:finalized txn))
+            status (-> txn' :status deref :status)]
+        (assoc op' :type (case status
+                           :confirmed  :ok
+                           :pending    :info
+                           :failed     :fail))))))
 
 (defrecord Client [conn node accounts token-rri]
   client/Client
@@ -116,34 +156,7 @@
   (invoke! [this test {:keys [f value] :as op}]
     (with-errors op
       (case f
-        :txn
-        (let [; Map account IDs to addresses and add the token RRI to each op.
-              ops (map (fn [{:keys [type] :as op}]
-                         (case type
-                           :transfer (let [{:keys [from to amount rri]} op]
-                                       [type
-                                        (id->address @accounts from)
-                                        (id->address @accounts to)
-                                        amount
-                                        rri])))
-                       (:ops value))
-              ;_ (info :ops ops)
-              ; Execute transaction
-              txn' (rc/txn! conn
-                            (id->key-pair @accounts (:from value))
-                            (str "t" (:id value))
-                            ops)
-              ; No matter what, we at least know our transaction ID
-              op'    (update op :value assoc :txn-id (:id txn'))]
-
-          ; Await execution. We wrap this with *another* with-errors: if it
-          ; crashes, at least we know the tx-id and can ask about it later.
-          (with-errors op'
-            (let [status (-> txn' :status deref :status)]
-              (assoc op' :type (case status
-                                 :confirmed  :ok
-                                 :pending    :info
-                                 :failed     :fail)))))
+        :txn (txn! conn accounts op)
 
         :check-txn
         (try+ (let [status (:status (rc/txn-status conn (:txn-id value)))]
@@ -294,11 +307,11 @@
                                     ; If this is the first write, give them a
                                     ; bunch to play with; otherwise almost
                                     ; every transfer will fail.
-                                    (-> 100 rand-int inc (* u/fee 10))
+                                    (-> 100 rand-int inc (* u/fee-scale 10))
 
                                     ; For transfers between normal accounts,
                                     ; pick 1-100x fee
-                                    (-> 100 rand-int inc (* u/fee)))
+                                    (-> 100 rand-int inc (* u/fee-scale)))
                           :rri    @(:token-rri gen)})))
         ; What accounts are we touching?
         tos   (set (map :to ops))

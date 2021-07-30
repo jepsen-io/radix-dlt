@@ -28,6 +28,7 @@
   (:require [clojure [set :as set]]
             [clojure.core.typed :as t]
             [clojure.tools.logging :refer [info warn]]
+            [dom-top.core :as dt :refer [assert+]]
             [jepsen [util :refer [map-vals pprint-str parse-long]]]
             [jepsen.radix-dlt [util :as u
                                :refer [Account
@@ -265,12 +266,11 @@
 (defn txn-op-txn->txn-log-txn
   "Converts a :txn op representation of a transaction to the txn-log
   representation. This is kind of a broken version of this--we're guessing
-  about the xrd token name and the fee structure. At some point I'm going to
-  rip out the workload code and replace its representation with a map like
-  this."
-  [{:keys [id ops]}]
+  about the xrd token name. At some point I'm going to rip out the workload
+  code and replace its representation with a map like this."
+  [{:keys [id fee ops]}]
   {:id      id
-   :fee     u/fee
+   :fee     fee
    :message (str "t" id)
    :actions ops})
 
@@ -488,7 +488,13 @@
                            inexplicable))
                   ; Not logged. Add this to our unlogged deltas *and* consider
                   ; how it might affect every extant balance.
-                  (let [txn*             (txn-op-txn->txn-log-txn value)
+                  (let [; We need the completed txn with fee in order to figure
+                        ; out what its impact might be on the balance
+                        value'           (-> pair-index
+                                             (get op)
+                                             :value
+                                             (assert+ "no value!"))
+                        txn*             (txn-op-txn->txn-log-txn value')
                         delta            (txn-account-delta account txn*)
                         unlogged-deltas' (->> unlogged-deltas
                                               (map (partial + delta))

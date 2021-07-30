@@ -449,7 +449,8 @@ export RADIXDLT_VALIDATOR_2_PRIVKEY=UCZRvnk5Jm9hEbpiingYsx7tbjf3ASNLHDf3BLmFaps=
                   (when (= "BOOTING" (:status res))
                     (throw+ {:type ::still-booting}))
                   res))
-              {:log-message (str "Waiting for https://" node "/health")})]
+              {:log-interval 30000
+               :log-message (str "Waiting for https://" node "/health")})]
     (dt/assert+ (= "UP" (:status res))
                 {:type ::malformed-node-data?
                  :res  res
