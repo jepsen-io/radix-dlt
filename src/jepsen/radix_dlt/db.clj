@@ -92,9 +92,14 @@
               (catch [:exit 10] _
                 ; Already running
                 ))
-        (let [url (str "https://github.com/radixdlt/radixdlt/releases/download/"
+        (let [url (if-let [zip (:zip test)]
+                    (let [remote (str "/tmp/jepsen/radix.zip")]
+                      (c/exec :mkdir :-p "/tmp/jepsen")
+                      (c/upload zip remote)
+                      (str "file://" remote))
+                    (str "https://github.com/radixdlt/radixdlt/releases/download/"
                        (:version test) "/radixdlt-dist-"
-                       (:version test) ".zip")]
+                       (:version test) ".zip"))]
           (cu/install-archive! url dist-dir))
 
         ; Create data and secret dirs

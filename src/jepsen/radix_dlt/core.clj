@@ -126,6 +126,8 @@
     :default  30
     :parse-fn read-string
     :validate [#(and (number? %) (pos? %)) "must be a positive number"]]
+
+   [nil "--zip ZIPFILE" "Path to a local radixdlt-dist-<whatever>.zip file to install, rather than using --version. Helpful if you want to test a feature branch or one-off build."]
    ])
 
 (defn -main
