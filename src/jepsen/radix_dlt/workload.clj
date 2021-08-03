@@ -97,6 +97,15 @@
          (catch [:type :txn-prep-failed] e#
            (assoc ~op :type :fail
                   :error [:txn-prep-failed (.getMessage (:cause ~'&throw-context))]))
+         (catch [:type :radix-dlt/failure, :code 1004] e#
+           (condp re-find (:message e#)
+             #"header parser received no bytes"
+             (assoc ~op :type :info, :error [:header-empty (:message e#)])
+
+             #"Connection refused"
+             (assoc ~op :type :fail, :error [:conn-refused (:message e#)])
+
+             (throw+ e#)))
          (catch [:type :radix-dlt/failure, :code 1500] e#
            (assoc ~op :type :fail, :error [:substate-not-found
                                            (:message e#)]))
@@ -209,7 +218,10 @@
 
   (teardown! [this test])
 
-  (close! [this test]))
+  (close! [this test])
+
+  client/Reusable
+  (reusable? [this test] true))
 
 (defn client
   "Constructs a fresh Jepsen client. Takes an accounts atom and an rri promise"
