@@ -103,7 +103,9 @@
              (assoc ~op :type :info, :error [:header-empty (:message e#)])
 
              #"Connection refused"
-             (assoc ~op :type :fail, :error [:conn-refused (:message e#)])
+             ; Slow these down juust a tad so we can focus on live nodes.
+             (do (Thread/sleep 1000)
+                 (assoc ~op :type :fail, :error [:conn-refused (:message e#)]))
 
              #"request timed out"
              (assoc ~op :type :info, :error [:request-timed-out] (:message e#))
@@ -564,7 +566,7 @@
           txn-id    (peek txns)]
       ;(info :txn-id txn-id :f (:f op))
       (if (and txn-id
-               (< (rand) 1/2) ; Only rewrite some requests.
+               (< (rand) 1/6) ; Only rewrite some requests.
                (#{:txn-log :raw-txn-log :balance} (:f op)))
         ; We've got a txn-id we haven't checked on, and this would have been a
         ; read. Rewrite it to a txn-check op.

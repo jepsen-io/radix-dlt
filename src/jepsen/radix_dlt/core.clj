@@ -32,9 +32,10 @@
 (def standard-nemeses
   "A collection of partial options maps for various nemeses we want to run as a
   part of test-all."
-  [{:nemesis #{}}
+  [{:nemesis nil}
    {:nemesis #{:kill}}
-   {:nemesis #{:partition}}])
+   {:nemesis #{:partition}}
+   {:nemesis #{:kill :partition}}])
 
 (defn parse-comma-kws
   "Takes a comma-separated string and returns a collection of keywords."
