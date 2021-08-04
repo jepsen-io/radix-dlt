@@ -4,6 +4,7 @@
   See https://github.com/radixdlt/radixdlt/blob/1.0-beta.35.1/radixdlt-java/radixdlt-java/src/test/java/com/radixdlt/client/lib/impl/SynchronousRadixApiClientTest.java for some test example code."
   (:require [clojure.tools.logging :refer [info warn]]
             [clojure.core.typed :as t]
+            [clj-http.client :as http]
             [dom-top.core :as dt :refer [assert+]]
             [jepsen [util :as util :refer [pprint-str]]]
             [potemkin :refer [def-derived-map]]
@@ -584,3 +585,23 @@
          :log-interval   20000
          :log-message    "Waiting for transactions to start working"})))
   (info "Consensus ready!"))
+
+;; JSONRPC methods not supported by the normal client
+
+(defn raw-transactions
+  "Lists the set of raw transactions directly from the index."
+  [node]
+  (let [res (http/post (str "https://" node "/developer")
+                       {:form-params {:jsonrpc "2.0"
+                                      :id      1
+                                      :method "index.get_transactions"
+                                      :params {:offset 1
+                                               :limit  Integer/MAX_VALUE}}
+                        ; TODO: move this somewhere shared with jepsen.db
+                        :basic-auth   ["admin" "jepsenpw"]
+                        :insecure?    true
+                        :content-type :json
+                        :as           :json})]
+    (when-let [e (:error (:body res))]
+      (throw+ (assoc e :type :radix-dlt/error)))
+    (:result (:body res))))

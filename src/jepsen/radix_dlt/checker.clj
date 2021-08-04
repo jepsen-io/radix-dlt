@@ -1,6 +1,7 @@
 (ns jepsen.radix-dlt.checker
   "Analyzes the correctness of Radix-DLT histories."
-  (:require [clojure.tools.logging :refer [info warn]]
+  (:require [clojure [pprint :refer [pprint]]]
+            [clojure.tools.logging :refer [info warn]]
             [elle [core :as elle]
                   [graph :as g]]
             [jepsen [checker :as checker]
@@ -18,6 +19,45 @@
                                                    txn-op-accounts]]
             [jepsen.tests.cycle.append :as append]
             [knossos [op :as op]]))
+
+(def elle-lock
+  "We're going to pull some thread-unsafe with-redefs weirdness when using
+  Elle--we need a lock to protect it."
+  (Object.))
+
+(defn raw-txn-history
+  "Takes an analysis and rewrites its :txn and :raw-txn-log operations to look
+  like transactions operating on a single global list."
+  [{:keys [history] :as analysis}]
+  (->> history
+       (filter (comp #{:txn :raw-txn-log} :f))
+       (mapv (fn [{:keys [type f value] :as op}]
+               (case f
+                 ; For transactions, we rewrite them as a single append of the txn
+                 ; ID to a global key :log.
+                 :txn (if-let [id (:id value)]
+                        (assoc op :value [[:append :log (:id value)]])
+                        (assoc op :value []))
+
+                 ; And for raw-txn-log ops, we interpret them as reads.
+                 :raw-txn-log
+                 (assoc op :value [[:r :log (when value (vec value))]]))))))
+
+(defn raw-txn-checker
+  "The raw txn checker treats the raw txn log as a single strict-serializable
+  list, and every txn as an append to it."
+  []
+  (reify checker/Checker
+    (check [this test history {:keys [analysis] :as opts}]
+      (let [history (raw-txn-history analysis)
+            ;_       (pprint history)
+            elle    (append/checker
+                      {:consistency-models [:strict-serializable]})
+            opts    (assoc opts :subdirectory "raw-txn")
+            res     (locking elle-lock
+                      (checker/check elle test history opts))]
+        res))))
+
 
 (defn list-append-history
   "Takes an analysis and rewrites its history to look like an Elle list-append
@@ -45,6 +85,12 @@
                   txn (->> (txn-op-accounts op)
                            (mapv (fn [acct] [:append acct id])))]
               (assoc op :value txn))
+
+            ; We check raw-txn-logs separately--they contain all accounts
+            ; merged and don't make sense to check in this context. We rewrite
+            ; them to empty txns.
+            :raw-txn-log
+            (assoc op :value [])
 
             :txn-log
             (let [k   (:account value)
@@ -244,9 +290,10 @@
           ; Instead of redefining all the anomaly types for our own weird
           ; temporal model, we're going to sneak in there and redefine how Elle
           ; computes its realtime graph.
-          (let [res (with-redefs [elle.core/realtime-graph
-                                  (partial realtime+node-graph test)]
-                      (checker/check elle test la-history opts))
+          (let [res (locking elle-lock
+                      (with-redefs [elle.core/realtime-graph
+                                    (partial realtime+node-graph test)]
+                        (checker/check elle test la-history opts)))
                 ; As an extra piece of debugging info, we're going to record
                 ; how many reads went recognized/unrecognized.
                 balances           (filter (comp #{:balance} :f) la-history)
@@ -442,6 +489,7 @@
                     :negative     (negative-checker)
                     :inexplicable (inexplicable-balance-checker)
                     :list-append  (list-append-checker)
+                    :raw-txn      (raw-txn-checker)
                     :balance-vis  (balance-vis-checker)
                     :timeline     (timeline/html)
                     :txn-perf     (txn-perf)})]
@@ -449,6 +497,9 @@
     ; independently.
     (reify checker/Checker
       (check [this test history opts]
+        ; We start by rewriting info txns using check-txn operations--we're
+        ; going to hit a *ton* of timeouts, and basically everything benefits
+        ; from reducing those.
         (let [history  (rewrite-info-txns history)
               analysis (analysis history)]
           ; As an aside: render perf plots off of the rewritten history in a

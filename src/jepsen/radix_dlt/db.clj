@@ -245,6 +245,8 @@ export RADIXDLT_VALIDATOR_2_PRIVKEY=UCZRvnk5Jm9hEbpiingYsx7tbjf3ASNLHDf3BLmFaps=
            :db.location                data-dir
            :api.account.enable         true
            :api.archive.enable         true
+           :api.developer.enable       true
+           :api.developer.transaction_index.enable true
            :api.health.enable          true
            :api.system.enable          true
            :api.construction.enable    true

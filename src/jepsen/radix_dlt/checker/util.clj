@@ -195,6 +195,12 @@
     (when rri
       (re-find #"^xrd_" rri))))
 
+(t/ann raw-txn-log? [(RadixOp) -> Boolean])
+(defn raw-txn-log?
+  "Is this operation a :f :raw-txn-log op?"
+  [op]
+  (= :raw-txn-log (:f op)))
+
 (t/ann add-pair-index
        [(t/HMap :mandatory {:history History}) ->
         (t/HMap :mandatory {:history    History
@@ -258,6 +264,7 @@
   [history]
   (->> history
        (filter op/invoke?)
+       (remove raw-txn-log?)
        (map op-accounts)
        (reduce set/union (sorted-set))))
 
@@ -407,6 +414,7 @@
                        value (:value op)]
                    (case f
                      :balance (= account (:account value))
+                     :raw-txn-log false
                      :txn-log (= account (:account value))
                      :txn     (or (= account (:from value))
                                   (some #{account} (map :to (:ops value))))))))
@@ -457,8 +465,8 @@
         (let [{:keys [type f value] :as op} (first history)]
           ; (info :op op)
           (case f
-            ; We can ignore txn-log ops
-            :txn-log
+            ; We can ignore txn-log and raw-txn-log ops
+            (:txn-log :raw-txn-log)
             (recur (next history) balances unlogged-deltas inexplicable)
 
             ; For a txn invocation, we need to determine if it's possible this
@@ -717,5 +725,6 @@
             (recur (next history)
                    (conj history' op)
                    txn's)))))))
+
 
 )

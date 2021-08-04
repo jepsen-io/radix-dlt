@@ -105,6 +105,9 @@
              #"Connection refused"
              (assoc ~op :type :fail, :error [:conn-refused (:message e#)])
 
+             #"request timed out"
+             (assoc ~op :type :info, :error [:request-timed-out] (:message e#))
+
              (throw+ e#)))
          (catch [:type :radix-dlt/failure, :code 1500] e#
            (assoc ~op :type :fail, :error [:substate-not-found
@@ -112,12 +115,20 @@
          (catch [:type :radix-dlt/failure, :code 1604] e#
            (assoc ~op :type :fail, :error [:parse-error (:message e#)]))
          (catch [:type :radix-dlt/failure, :code 2515] e#
-           (assoc ~op :type :fail, :error :insufficient-balance))))
+           (assoc ~op :type :fail, :error :insufficient-balance))
+
+         ; clj-http errors when we call things directly via jsonrpc
+         (catch [:status 404] e#
+           (assoc ~op :type :fail, :error :not-found))
+         (catch [:status 500] e#
+           (assoc ~op :type :info, :error [:http-500 (:body e#)]))))
 
 (defn txn!
-  "Takes a client, an accounts map, and a :txn op. Executes the txn op and
-  constructs a resulting op."
-  [client accounts op]
+  "Takes a client, an accounts map, an atom mapping radix txn ids to Jepsen txn
+  ids, and a :txn op. Executes the txn op and constructs a resulting op. As a
+  side effect, updates the radix->jepsen txn id map so that we can interpret
+  this txn ID when we read it in the future."
+  [client accounts radix-txn-id->txn-id op]
   (letr [value (:value op)
          ; Map account IDs to addresses and add the token RRI to each op.
          ops (map (fn [{:keys [type] :as op}]
@@ -138,6 +149,9 @@
                      (throw+ {:type :txn-prep-failed}))
                    (catch [:type :radix-dlt/failure] e
                      (throw+ {:type :txn-prep-failed})))
+         ; Save the txn ID *before* we actually create the txn--ensuring we can
+         ; interpret it if it comes up later.
+         _   (swap! radix-txn-id->txn-id assoc (:id txn) (:id value))
          op' (update op :value
                      assoc
                      :txn-id (:id txn)
@@ -152,7 +166,7 @@
                            :pending    :info
                            :failed     :fail))))))
 
-(defrecord Client [conn node accounts token-rri]
+(defrecord Client [conn node accounts token-rri radix-txn-id->txn-id]
   client/Client
   (open! [this test node]
     (assoc this
@@ -168,7 +182,7 @@
   (invoke! [this test {:keys [f value] :as op}]
     (with-errors op
       (case f
-        :txn (txn! conn accounts op)
+        :txn (txn! conn accounts radix-txn-id->txn-id op)
 
         :check-txn
         (try+ (let [status (:status (rc/txn-status conn (:txn-id value)))]
@@ -206,6 +220,16 @@
               value'  (assoc value :txns log)]
           (assoc op :type :ok :value value'))
 
+        :raw-txn-log
+        (let [res (rc/raw-transactions node)
+              txn-ids (->> (:transactions res)
+                           (map :transaction_identifier)
+                           ; Translate Radix txn ids back to Jepsen's smaller
+                           ; txn IDs.
+                           (keep @radix-txn-id->txn-id)
+                           )]
+          (assoc op :type :ok, :value txn-ids))
+
         :balance
         (let [b (->> (rc/token-balances conn (id->address @accounts
                                                           (:account value)))
@@ -226,7 +250,7 @@
 (defn client
   "Constructs a fresh Jepsen client. Takes an accounts atom and an rri promise"
   [accounts token-rri]
-  (Client. nil nil accounts token-rri))
+  (Client. nil nil accounts token-rri (atom {})))
 
 ;; Generator
 
@@ -404,9 +428,9 @@
               ; How far into the concurrency of the test is that?
               zone (/ t (count (:workers context)))
               ; Pick a f based on the zone: first third do txns.
-              f (if (< zone 1/3)
+              f (if (< zone 1/4)
                   :txn
-                  (rand-nth [:txn-log :balance]))
+                  (rand-nth [:balance :txn-log :raw-txn-log]))
               op (assoc op :f f)]
           (case f
             :txn (let [[transfer gen'] (gen-transfer! this)]
@@ -417,6 +441,10 @@
             ; pool, or our default account 1.
             :txn-log [(assoc op :value {:account (gen-rand-read-key this)})
                       this]
+
+            ; For the raw txn log, there's no value required--we're reading
+            ; everything.
+            :raw-txn-log [(assoc op :value nil) this]
 
             :balance [(assoc op :value {:account (gen-rand-read-key this)})
                       this]))))))
@@ -512,7 +540,7 @@
   gen/Generator
   (update [this test context {:keys [f type value] :as event}]
     (when (< (rand) 1/10)
-      (info :check-txn-queue (count txns) (seq txns)))
+      (info :check-txn-queue (count txns)))
     (if (or (and (= :txn f)
                  (= :info type)
                  (:txn-id value)) ; We can't always get a txn-id here
@@ -537,7 +565,7 @@
       ;(info :txn-id txn-id :f (:f op))
       (if (and txn-id
                (< (rand) 1/2) ; Only rewrite some requests.
-               (#{:txn-log :balance} (:f op)))
+               (#{:txn-log :raw-txn-log :balance} (:f op)))
         ; We've got a txn-id we haven't checked on, and this would have been a
         ; read. Rewrite it to a txn-check op.
         [(assoc op :f :check-txn, :value {:txn-id txn-id})
