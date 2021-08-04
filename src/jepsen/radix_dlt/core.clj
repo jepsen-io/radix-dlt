@@ -29,6 +29,13 @@
   "Valid targets for partition nemesis operations."
   #{:one :primaries :minority-third :majority-ring})
 
+(def standard-nemeses
+  "A collection of partial options maps for various nemeses we want to run as a
+  part of test-all."
+  [{:nemesis #{}}
+   {:nemesis #{:kill}}
+   {:nemesis #{:partition}}])
+
 (defn parse-comma-kws
   "Takes a comma-separated string and returns a collection of keywords."
   [spec]
@@ -105,7 +112,7 @@
     :default 10]
 
    [nil "--rate HZ" "Target number of ops/sec"
-    :default  100
+    :default  40
     :parse-fn read-string
     :validate validate-non-neg]
 
@@ -130,10 +137,23 @@
    [nil "--zip ZIPFILE" "Path to a local radixdlt-dist-<whatever>.zip file to install, rather than using --version. Helpful if you want to test a feature branch or one-off build."]
    ])
 
+(defn all-tests
+  "Takes parsed CLI options and constructs a sequence of tests from them."
+  [opts]
+  (let [nemeses (if (nil? (:nemesis opts))
+                  standard-nemeses
+                  [#{}])
+        tests (->> (for [i (range (:test-count opts)), nemesis nemeses]
+                     (merge opts nemesis))
+                   (map radix-test))]
+    tests))
+
 (defn -main
   "CLI entry point."
   [& args]
   (cli/run! (merge (cli/single-test-cmd {:test-fn   radix-test
                                          :opt-spec  cli-opts})
+                   (cli/test-all-cmd {:tests-fn     all-tests
+                                      :opt-spec     cli-opts})
                    (cli/serve-cmd))
             args))
