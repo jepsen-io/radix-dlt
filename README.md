@@ -33,11 +33,34 @@ echo "apply plugin: 'maven'" >> build.gradle
 
 ## Usage
 
-FIXME
+```
+lein run test-all --concurrency 3n
+```
+
+## Building Radix DLT
+
+If you need to build a custom build of Radix to test a patch:
+
+```sh
+cd radix
+DOCKER_BUILDKIT=1 docker build --output type=local,dest=out --progress plain -f radixdlt-core/docker/Dockerfile.build .
+```
+
+This will spit out a zipfile like
+
+```
+out/distributions/radixdlt-1.0.0-<branch>-SNAPSHOT.zip
+```
+
+Which you can copy to any local path you like, then run
+
+```sh
+lein run test ... --zip path/to/radixdlt-1.0.0-whatever-SNAPSHOT.zip
+```
 
 ## License
 
-Copyright © 2021 FIXME
+Copyright © 2021 Jepsen, LLC
 
 This program and the accompanying materials are made available under the
 terms of the Eclipse Public License 2.0 which is available at
