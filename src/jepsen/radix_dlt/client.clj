@@ -47,7 +47,7 @@
            (java.util.function Function)
            (org.bouncycastle.util.encoders Hex)))
 
-(def network-id 99)
+(def test-network-id 99)
 
 (defprotocol ToClj
   "Transforms RadixDLT client types into Clojure structures."
@@ -257,7 +257,7 @@
 
   String
   (->account-address [x]
-    (let [readdr (-> (com.radixdlt.networks.Addressing/ofNetworkId network-id)
+    (let [readdr (-> (com.radixdlt.networks.Addressing/ofNetworkId test-network-id)
                      .forAccounts
                      (.parse x))]
       (AccountAddress/create readdr))))
@@ -271,7 +271,7 @@
 
   String
   (->validator-address [s]
-    (-> (com.radixdlt.networks.Addressing/ofNetworkId network-id)
+    (-> (com.radixdlt.networks.Addressing/ofNetworkId test-network-id)
         .forValidators
         (.parse s)
         ->validator-address))
@@ -588,15 +588,15 @@
 
 ;; JSONRPC methods not supported by the normal client
 
-(defn raw-transactions
-  "Lists the set of raw transactions directly from the index."
-  [node]
+(defn dev-rpc!
+  "Makes a call to the /developer JSONRPC endpoint. Takes a node, a method name
+  (e.g. :index.get_transactions) and a parameter map."
+  [node method params]
   (let [res (http/post (str "https://" node "/developer")
                        {:form-params {:jsonrpc "2.0"
                                       :id      1
-                                      :method "index.get_transactions"
-                                      :params {:offset 1
-                                               :limit  Integer/MAX_VALUE}}
+                                      :method (name method)
+                                      :params params}
                         ; TODO: move this somewhere shared with jepsen.db
                         :basic-auth   ["admin" "jepsenpw"]
                         :insecure?    true
@@ -605,3 +605,18 @@
     (when-let [e (:error (:body res))]
       (throw+ (assoc e :type :radix-dlt/error)))
     (:result (:body res))))
+
+(defn raw-transactions
+  "Lists the set of raw transactions directly from the index."
+  [node]
+  (dev-rpc! node :index.get_transactions {:offset 1 :limit Integer/MAX_VALUE}))
+
+(defn raw-balances
+  "Lists the balances of every account."
+  [node]
+  (dev-rpc! node :developer.query_resource_state
+            {:prefix "06" ; TOKENS_IN_ACCOUNT
+             :groupBy "owner"
+             :query {:type "resource"
+                     :value "01" ; XRD
+                     }}))

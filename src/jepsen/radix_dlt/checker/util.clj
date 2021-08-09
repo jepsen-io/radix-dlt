@@ -251,12 +251,17 @@
 
 (t/ann op-accounts [RadixOp -> (t/Set Account)])
 (defn op-accounts
-  "A set of all accounts involved in a Radix op."
+  "A (conservative) set of all accounts involved in a Radix op."
   [{:keys [f value] :as op}]
   (case f
-    :balance #{(:account value)}
-    :txn-log #{(:account value)}
-    :txn     (txn-op-accounts op)))
+    :balance      #{(:account value)}
+    :txn-log      #{(:account value)}
+    :txn          (txn-op-accounts op)
+    ; For raw balances, even though they're technically a read of every account
+    ; extant at that time, we consider them just a read of those keys they
+    ; returned. We don't try to handle raw hex accounts--just those we could
+    ; map back to account IDs.
+    :raw-balances (set (filter number? (keys value)))))
 
 (t/ann ^:no-check all-accounts [History -> (t/Set Account)])
 (defn all-accounts
@@ -414,10 +419,11 @@
                        value (:value op)]
                    (case f
                      :balance (= account (:account value))
-                     :raw-txn-log false
                      :txn-log (= account (:account value))
                      :txn     (or (= account (:from value))
-                                  (some #{account} (map :to (:ops value))))))))
+                                  (some #{account} (map :to (:ops value))))
+                     :raw-balances true
+                     :raw-txn-log false))))
        (map-indexed (fn sub-index [i op] (assoc op :sub-index i)))
        vec))
 
@@ -528,6 +534,25 @@
                   (recur (next history) balances unlogged-deltas
                          (conj inexplicable
                                {:op       op
+                                :expected (into (sorted-set) balances)})))))
+
+            ; For a raw balance read, its read of this specific acct has to be
+            ; valid.
+            :raw-balances
+            (if-not (= :ok type)
+              (recur (next history) balances unlogged-deltas inexplicable)
+
+              ; OK, we read something. Was the read of this account legal?
+              (let [balance (get value account)]
+                (if (or (nil? balance)
+                        (contains? balances balance))
+                  (recur (next history) balances unlogged-deltas inexplicable)
+                  ; Aha! Caught one
+                  (recur (next history) balances unlogged-deltas
+                         (conj inexplicable
+                               {:op       op
+                                :account  account
+                                :actual   balance
                                 :expected (into (sorted-set) balances)})))))))))))
 
 (defn balance-balances

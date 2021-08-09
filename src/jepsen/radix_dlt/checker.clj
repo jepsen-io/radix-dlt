@@ -73,7 +73,7 @@
   :balance operations are (and this is such a hack) also mapped to reads of
   lists of txn ids: we play forward what we *think* the sequence of txns was,
   and use that to construct a mapping of balances to sequences of txns."
-  [{:keys [accounts history] :as analysis}]
+  [{:keys [accounts history pair-index] :as analysis}]
   ;(info :account->balance->txn-ids
   ;      (pprint-str account->balance->txn-ids))
   (mapv (fn [{:keys [type f value] :as op}]
@@ -125,7 +125,40 @@
                          :balance (:balance value)
                          :value   [[:r account nil]])
 
-                  (assoc op :type :ok, :value [[:r account ids]]))))))
+                  (assoc op :type :ok, :value [[:r account ids]]))))
+
+            ; Raw balance reads are translated to a read of every account
+            ; *ever*.
+            :raw-balances
+            (let [; We need to look forward to figure out which accounts we can
+                  ; even appear to *try* to read.
+                  complete (if (= :invoke type)
+                             (get pair-index op)
+                             op)
+                  ; What *will* we read later?
+                  value'   (:value complete)
+                  ; In general, Radix is so flaky about losing transactions
+                  ; from the log that pretty much every balances read is going
+                  ; to have some balances we can't explain. To allow the
+                  ; checker to tell us at least *some* things, we project
+                  ; a raw-balances read to just those accounts which were
+                  ; uniquely resolvable, and construct a transaction which
+                  ; reads those. Unresolvable and ambiguous balances we just
+                  ; skip over.
+                  txn (->> (keys accounts)
+                           (keep (fn [acct]
+                                   (let [balance (get value' acct)
+                                         ids     (balance->txn-id-prefix
+                                                   analysis acct balance)]
+                                     (case ids
+                                       :unresolvable nil
+                                       :ambiguous    nil
+                                       [:r acct (if (= :invoke type)
+                                                  nil
+                                                  ids)]))))
+                           vec)]
+              (assoc op :value txn))
+            ))
         (filter (comp integer? :process) history)))
 
 (defn write?
@@ -283,7 +316,7 @@
               ; constant timeouts!
               ;history    (subvec history 0 500)
               la-history (list-append-history analysis)]
-          ;(info :history (pprint-str la-history))
+          (info :history (pprint-str la-history))
           ; Oh this is such a gross hack. There's all this *really* nice,
           ; sophisticated machinery for detecting various anomalies in
           ; elle.txn, but it all assumes the builtin realtime/process graphs.

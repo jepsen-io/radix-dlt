@@ -11,6 +11,10 @@
                               [nemesis :as nemesis]
                               [workload :as workload]]))
 
+(def fs
+  "A set of all (logical) functions we use to interact with Radix"
+  #{:balance :raw-balances :raw-txn-log :txn-log})
+
 (def nemeses
   "The types of faults our nemesis can produce"
   #{:pause :kill :partition :clock :membership})
@@ -103,6 +107,11 @@
     :default [:minority-third :majority :all]
     :parse-fn parse-comma-kws
     :validate [(partial every? db-targets) (cli/one-of db-targets)]]
+
+   [nil "--fs FUNCTION_TYPES" "A comma-separated list of functions to use when interacting with Radix. This allows you to e.g. only perform raw balance reads instead of archive balance reads. `txn-log` is strongly recommended; balance reads are essentially useless without them."
+    :default #{:balance :raw-balances :raw-txn-log :txn-log}
+    :parse-fn (comp set parse-comma-kws)
+    :validate [(partial every? fs) (cli/one-of fs)]]
 
    [nil "--partition-targets TARGETS" "A comma-separated list of nodes to target for network partitions; e.g. one,all"
     :default [:minority-third :majorities-ring]

@@ -5,11 +5,25 @@
             [jepsen [checker :as checker]
                     [client :as client]
                     [generator :as gen]
-                    [util :as util]]
+                    [util :as util :refer [pprint-str]]]
             [jepsen.radix-dlt [checker :as rchecker]
                               [client :as rc]
                               [util :as u]]
             [slingshot.slingshot :refer [try+ throw+]]))
+
+(defn normalize-address-str
+  "Takes an address string (a series of hex digits, optionally surrounded by {
+  ... }), and strips the braces from it."
+  [^String addr]
+  (cond (re-find #"^\{[0-9a-f]+\}$" addr)
+        (subs addr 1 (dec (.length addr)))
+
+        (re-find #"^[0-9a-f]+$" addr)
+        addr
+
+        :else
+        (throw+ {:type :malformed-address-str
+                 :address addr})))
 
 (defn accounts
   "This structure helps us track the mapping between our logical account IDs
@@ -32,7 +46,7 @@
      :by-id       (assoc (:by-id accounts)      (:id account)       account)
      :by-address  (assoc (:by-address accounts) (:address account)  account)
      :by-address-str (assoc (:by-address-str accounts)
-                            (str (:address account))
+                            (normalize-address-str (str (:address account)))
                             account)}))
 
 (defn conj-small-account
@@ -58,7 +72,12 @@
 (defn address-str->id
   "Converts an address string to an ID, given an accounts structure."
   [accounts address]
-  (-> accounts :by-address-str (get address) :id))
+  (-> accounts :by-address-str (get (normalize-address-str address)) :id))
+
+(defn address->id
+  "Converts an AccountAddress to an ID, given an accounts structure."
+  [accounts address]
+  (-> accounts :by-address (get address) :id))
 
 (defn id->key-pair
   "Converts an ID to a key-pair, given an accounts structure."
@@ -205,8 +224,9 @@
         (let [; A little helper: we want to translate addresses into numeric IDs
               ; when we know them, but leave them as big hex strings otherwise
               address->id (fn [address]
-                            (or (address-str->id @accounts address)
-                                address))
+                            (when address
+                              (or (address-str->id @accounts address)
+                                  address)))
               log (->> (rc/txn-history conn (id->address @accounts
                                                          (:account value)))
                        reverse
@@ -221,6 +241,23 @@
                                                actions)})))
               value'  (assoc value :txns log)]
           (assoc op :type :ok :value value'))
+
+        :raw-balances
+        (let [res (rc/raw-balances node)
+              ; Map those balances back to a map of account IDs to balances.
+              balances (->> (:entries res)
+                            ; Rewrite known accounts to IDs
+                            (keep (fn [{:keys [amount key] :as m}]
+                                    (let [id (or (->> key
+                                                      rc/->account-address
+                                                      (address->id @accounts))
+                                                 key)]
+                                      ; Don't bother recording default accounts
+                                      ; that we don't touch
+                                      (when-not (u/unused-account-ids id)
+                                        [id (bigint amount)]))))
+                            (into {}))]
+          (assoc op :type :ok, :value balances))
 
         :raw-txn-log
         (let [res (rc/raw-transactions node)
@@ -377,6 +414,7 @@
    key-dist-base
    max-writes-per-key
    max-txn-size
+   fs           ; Set of :fs we generate
    accounts     ; An atom to an accounts structure
    token-rri    ; A promise of an RRI for the token we'll transfer
    key-pool     ; A vector of active keys; always of size key-count
@@ -429,10 +467,15 @@
         (let [t (->> op :process (gen/process->thread context))
               ; How far into the concurrency of the test is that?
               zone (/ t (count (:workers context)))
-              ; Pick a f based on the zone: first third do txns.
+              ; Pick a f based on the zone: first quarter do txns, others are
+              ; reads. We do this to avoid blocking readers on txns when txns
+              ; are super slow.
               f (if (< zone 1/4)
                   :txn
-                  (rand-nth [:balance :txn-log :raw-txn-log]))
+                  (->> [:balance :txn-log :raw-balances :raw-txn-log]
+                       (filter fs)
+                       vec
+                       rand-nth))
               op (assoc op :f f)]
           (case f
             :txn (let [[transfer gen'] (gen-transfer! this)]
@@ -443,6 +486,9 @@
             ; pool, or our default account 1.
             :txn-log [(assoc op :value {:account (gen-rand-read-key this)})
                       this]
+
+            ; For raw balances, no value needed
+            :raw-balances [(assoc op :value nil) this]
 
             ; For the raw txn log, there's no value required--we're reading
             ; everything.
@@ -455,6 +501,8 @@
   "Constructs a Generator out of an options map. Options are:
 
     :accounts             An atom to an accounts structure
+
+    :fs                   The :f functions of operations we generate
 
     :key-dist             Controls probability distribution for keys being
                           selected for a given operation. Choosing :uniform
@@ -527,6 +575,7 @@
     (map->Generator
       {:accounts           (:accounts opts)
        :token-rri          (:token-rri opts)
+       :fs                 (:fs opts)
        :key-dist           key-dist
        :key-dist-base      (:key-dist-base opts 2)
        :key-count          key-count
@@ -567,7 +616,7 @@
       ;(info :txn-id txn-id :f (:f op))
       (if (and txn-id
                (< (rand) 1/6) ; Only rewrite some requests.
-               (#{:txn-log :raw-txn-log :balance} (:f op)))
+               (#{:balance :txn-log :raw-balances :raw-txn-log} (:f op)))
         ; We've got a txn-id we haven't checked on, and this would have been a
         ; read. Rewrite it to a txn-check op.
         [(assoc op :f :check-txn, :value {:txn-id txn-id})
