@@ -644,9 +644,11 @@
                                   :token-rri token-rri)
                            generator!
                            check-txn-generator)
-     :final-generator (delay
-                        (->> @accounts
-                             :accounts
-                             (map :id)
-                             (map (fn [acct]
-                                    {:f :txn-log, :value {:account acct}}))))}))
+     :final-generator [(when (get (:fs opts) :raw-txn-log) {:f :raw-txn-log})
+                       (when (get (:fs opts) :txn-log)
+                         (delay
+                           (->> @accounts
+                                :accounts
+                                (map :id)
+                                (map (fn [acct]
+                                       {:f :txn-log, :value {:account acct}})))))]}))

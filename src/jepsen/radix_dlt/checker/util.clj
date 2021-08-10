@@ -404,6 +404,48 @@
                        add-id-index-to-txn-log
                        add-balance'-index-to-txn-log)))))
 
+(defn raw-txn-logs
+  "As an alternative approach to computing transaction logs, we can use the
+  *raw* txn logs rather than the archive API. If we do this, it won't let us
+  catch as many errors in the archive API. That's why this is broken out into a
+  separate code path."
+  [{:keys [history txn-index] :as analysis}]
+  ; First, find the single longest txn log
+  (let [longest (->> history
+                     (filter raw-txn-log?)
+                     (filter op/ok?)
+                     (map :value)
+                     (sort-by count)
+                     last)
+        ; Right. Now this log is *only* a sequence of txn IDs, so we need to
+        ; inflate those back into proper txns. We'll do this via the analysis'
+        ; transaction index, and build up a map of account IDs to txn logs.
+        logs
+        (reduce (fn [logs id]
+                  (let [op (assert+ (get txn-index id)
+                                    {:type :no-txn-with-id
+                                     :id   id})
+                        accts (txn-op-accounts op)
+                        txn   (txn-op-txn->txn-log-txn (:value op))]
+                    (reduce (fn [logs acct]
+                              (let [log' (-> logs
+                                             (get acct {:account acct
+                                                        :txns []})
+                                             (update :txns conj txn))]
+                                (assoc logs acct log')))
+                            logs
+                            accts)))
+                {}
+                longest)]
+    ; Now that we've built up the txn logs, we augment them with indices and
+    ; balances.
+    (map-vals (fn [txn-log]
+                (-> txn-log
+                    add-balances-to-txn-log
+                    add-id-index-to-txn-log
+                    add-balance'-index-to-txn-log))
+              logs)))
+
 (defn account-history
   "Restricts a history to a single account, and assigns each operation a
   sequential :sub-index."
@@ -423,7 +465,7 @@
                      :txn     (or (= account (:from value))
                                   (some #{account} (map :to (:ops value))))
                      :raw-balances true
-                     :raw-txn-log false))))
+                     :raw-txn-log true))))
        (map-indexed (fn sub-index [i op] (assoc op :sub-index i)))
        vec))
 
@@ -585,12 +627,17 @@
 
 (defn add-accounts
   "Takes an analysis and adds an :accounts map to it."
-  [analysis]
-  (let [history  (:history analysis)
-        txn-logs (txn-logs history)]
+  [analysis test]
+  (let [history   (:history analysis)
+        txn-index (:txn-index analysis)
+        txn-logs  (if (:raw-txn-logs test)
+                    (do (info "Using raw txn logs for inference")
+                        (raw-txn-logs analysis))
+                    (txn-logs history))]
+    ;(info :txn-logs (pprint-str txn-logs))
     (->> (all-accounts history)
          (pmap (fn [account]
-                 (let [history (account-history account history)
+                 (let [history    (account-history account history)
                        pair-index (history/pair-index+ history)
                        txn-log (get txn-logs account)
                        txn-ids (->> history
@@ -649,11 +696,11 @@
      :inexplicable-balances A collection of maps which describe balance
                             operations which cannot be mapped to any possible
                             balance for that account.}"
-  [history]
+  [history test]
   (-> {:history history}
       add-pair-index
       add-txn-index
-      add-accounts))
+      (add-accounts test)))
 
 (defn balance->txn-id-prefix
   "Takes an analysis, an account, and a balance. Returns:

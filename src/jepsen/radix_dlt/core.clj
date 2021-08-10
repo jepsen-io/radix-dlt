@@ -118,6 +118,9 @@
     :parse-fn parse-comma-kws
     :validate [(partial every? partition-targets) (cli/one-of partition-targets)]]
 
+   [nil "--raw-txn-logs" "If set, use raw-txn-log operations, rather than txn-log ops, to infer transaction orders and balances during checking."
+    :default false]
+
    [nil "--recovery-time SECONDS" "How long should we wait for cluster recovery before final reads?"
     :default 10]
 

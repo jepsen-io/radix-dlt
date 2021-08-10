@@ -86,11 +86,21 @@
                            (mapv (fn [acct] [:append acct id])))]
               (assoc op :value txn))
 
-            ; We check raw-txn-logs separately--they contain all accounts
-            ; merged and don't make sense to check in this context. We rewrite
-            ; them to empty txns.
+            ; For raw txn logs, we rewrite them to a single transaction reading
+            ; every extant key, by projecting the log to just those txns which
+            ; involved that key. This isn't really a *true* read of keys, but
+            ; it still gives us txn ordering information, and that's critical
+            ; to the rest of our balance inference process.
             :raw-txn-log
-            (assoc op :value [])
+            (->> (keys accounts)
+                 (map (fn [acct]
+                        (let [txn-ids (-> accounts (get acct) :txn-ids)
+                              ; Filter the log to only involved txn IDs
+                              sublog  (->> value
+                                           (filter txn-ids)
+                                           vec)]
+                          [:r acct sublog])))
+                 (assoc op :value))
 
             :txn-log
             (let [k   (:account value)
@@ -312,11 +322,8 @@
                               :consistency-models [:strict-serializable]})]
     (reify checker/Checker
       (check [this test history {:keys [analysis] :as opts}]
-        (let [; TODO: unrestrict history! We're just doing this to avoid
-              ; constant timeouts!
-              ;history    (subvec history 0 500)
-              la-history (list-append-history analysis)]
-          (info :history (pprint-str la-history))
+        (let [la-history (list-append-history analysis)]
+          ;(info :history (pprint-str (take 100 la-history)))
           ; Oh this is such a gross hack. There's all this *really* nice,
           ; sophisticated machinery for detecting various anomalies in
           ; elle.txn, but it all assumes the builtin realtime/process graphs.
@@ -392,15 +399,17 @@
 (defn txn-diff
   "Takes a txn1 (from a :txn op invocation) and a txn2 (from a txn log) and
   returns a map describing their difference, if one exists."
-  [txn1 txn2]
+  [test txn1 txn2]
   ; Radix is going to silently drop self-transfers from
   ; the transactions. Not sure whether this is bad or
   ; not, but it feels... minor? We'll let it pass by
   ; filtering them out of our own representation here.
-  (let [txn1 (->> (:ops txn1)
-                  (remove (fn [op]
-                            (= (:from op) (:to op))))
-                  (assoc txn1 :ops))]
+  (let [txn1 (if (:raw-txn-logs test)
+               txn1
+               (->> (:ops txn1)
+                    (remove (fn [op]
+                              (= (:from op) (:to op))))
+                    (assoc txn1 :ops)))]
     (cond (nil? txn1)
           {:type   :out-of-nowhere
            :actual txn2}
@@ -446,7 +455,7 @@
             errs (->> (for [[account account-analysis] (:accounts analysis)
                             txn (:txns (:txn-log account-analysis))]
                         (when-let [id (:id txn)]
-                          (txn-diff (get txn-txns id) txn)))
+                          (txn-diff test (get txn-txns id) txn)))
                       (remove nil?))]
         {:valid? (empty? errs)
          :errors errs}))))
@@ -534,7 +543,7 @@
         ; going to hit a *ton* of timeouts, and basically everything benefits
         ; from reducing those.
         (let [history  (rewrite-info-txns history)
-              analysis (analysis history)]
+              analysis (analysis history test)]
           ; As an aside: render perf plots off of the rewritten history in a
           ; subdirectory.
           (checker/check (checker/perf (:perf-opts test)) test history
