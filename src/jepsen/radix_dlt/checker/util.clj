@@ -309,6 +309,7 @@
   "Takes an account ID and a transaction, and returns the net effect of this
   transaction on that account's XRD."
   [account txn]
+  (assert (:fee txn) (str "Txn " (pr-str txn) " has no fee!"))
   ; If we're the originator of this transaction, then we paid the fee
   (let [delta (if (-> txn :actions first :from (= account))
                 (- (:fee txn))
@@ -733,21 +734,35 @@
   a later :check-txn operation has determined their status. Specifically, the
   :txn :info operation is deleted from the history and is replaced by the
   completion of the txn-check operation, as if the txn-check completion were
-  the completion of the original :txn operation. All txn-check operations are
-  removed from the history."
+  the completion of the original :txn operation. The process of the txn
+  operation is replaced by that of the txn-check operation, since we don't know
+  if the original node actually confirmed the transaction or not.
+
+  All txn-check operations are removed from the history."
   [history]
-  ; First, build an set of txn-ids which we know will later be observed by a
-  ; check-txn operation. We use this to look ahead and figure out whether we
-  ; can skip the :info operation for a :txn.
+  ; First, build an map of txns which we know will later be observed by a
+  ; check-txn operation. The keys in this map are txn ids, and the values are
+  ; the completion check-txn operation which first observed it. We use this to
+  ; look ahead and figure out whether we can skip the :info operation for a
+  ; :txn.
   (let [checked (->> history
                      (filter (comp #{:check-txn} :f))
                      (filter op/ok?)
                      ; Specifically, we need to know that the operation was
                      ; confirmed or failed; pending tells us nothing.
-                     (map :value)
-                     (filter (comp #{:confirmed :failed} :status))
-                     (map :txn-id)
-                     set)]
+                     (reduce (fn [checked {:keys [value] :as op}]
+                               (let [id     (:txn-id value)
+                                     status (:status value)]
+                                 (if (and (not (contains? checked id))
+                                          (#{:confirmed :failed} status))
+                                   ; This is the first definite read of this tx
+                                   (assoc checked id op)
+                                   checked)))
+                             {}))
+        ; We need to look forward from txn invokes to figure out what the
+        ; txn-id corresponding to a txn invocation will wind up being... augh
+        ; this is so complicated
+        pairs (history/pair-index+ history)]
     ;(info :checked checked)
     (loop [history   (seq history)  ; Remaining ops
            history'  []             ; Resulting history
@@ -759,17 +774,43 @@
         (let [{:keys [f type value] :as op} (first history)]
           (case f
             :txn
-            (if (and (= type :info)
-                     (contains? checked (:txn-id value)))
-              ; We crashed, but a later txn-check operation will save us.
-              ; Save this info op until we get to that point.
-              (recur (next history)
-                     history'
-                     (assoc txn's (:txn-id value) op))
+            (cond ; We're invoking a txn...
+                  (= type :invoke)
+                  (let [op' (get pairs op)
+                        p (when (= :info (:type op'))
+                            (when-let [txn-id (:txn-id (:value op'))]
+                              (when-let [checked (get checked txn-id)]
+                                ; We crashed, but with a txn id, and it was
+                                ; determinately checked. What process checked
+                                ; it?
+                                (:process checked))))]
+                    (if p
+                      ; We're *going* to crash and be recovered
+                      ; by some check-txn op. Rewrite our process ID to match
+                      ; theirs.
+                      (do (info :process p)
+                          (recur (next history)
+                                 (conj history' (assoc op :process p))
+                                 txn's))
+                      ; Some other kind of txn invocation; doesn't need to be
+                      ; rewritten.
+                      (recur (next history)
+                             (conj history' op)
+                             txn's)))
 
-              (recur (next history)
-                     (conj history' op)
-                     txn's))
+                  ; We crashed, but a later txn-check operation will save us.
+                  ; Save this info op until we get to that point.
+                  (and (= type :info)
+                       (contains? checked (:txn-id value)))
+                  (recur (next history)
+                         history'
+                         (assoc txn's (:txn-id value) op))
+
+                  ; Something else
+                  true
+                  (recur (next history)
+                         (conj history' op)
+                         txn's))
 
             :check-txn
             (if (and (= type :ok)
@@ -781,11 +822,10 @@
                   ; Rewrite this check-txn ok to a txn ok/fail
                   (recur (next history)
                          (conj history' (assoc op
-                                               :f :txn
-                                               :process (:process txn')
-                                               :type (case (:status value)
-                                                       :confirmed  :ok
-                                                       :failed     :fail)
+                                               :f     :txn
+                                               :type  (case (:status value)
+                                                        :confirmed  :ok
+                                                        :failed     :fail)
                                                :value (:value txn')))
                          (dissoc txn's id))
                   ; Either already resolved, or didn't crash in the first place?

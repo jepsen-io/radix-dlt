@@ -29,7 +29,8 @@
         max-writes-per-key 10
         accounts (atom (w/initial-accounts))
         rri      (doto (promise) (deliver "xrd_jepsen"))
-        gen      (->> (w/generator! {:accounts           accounts
+        gen      (->> (w/generator! {:fs                 #{:balance :txn-log}
+                                     :accounts           accounts
                                      :token-rri          rri
                                      :max-writes-per-key max-writes-per-key
                                      :key-count          10
@@ -44,10 +45,13 @@
         ops-by-f (group-by :f ops)]
 
     (testing "process dispersion"
-      (->> ops
-           (map :process)
-           frequencies
-           pprint))
+      (let [freqs (->> ops
+                       (map :process)
+                       frequencies
+                       vals)
+            mean (/ (reduce + 0 freqs) (count freqs))]
+        (doseq [f freqs]
+          (is (approx= 1/10 mean f)))))
 
     (testing "fs"
       (is (= #{:txn :balance :txn-log} (set (keys ops-by-f)))))
@@ -60,7 +64,8 @@
       (let [ks (->> ops (mapcat keys-in) (into (sorted-set)))
             as (->> @accounts :by-id keys (into (sorted-set)))]
         (is (set/subset? ks as))
-        (pprint (set/difference ks as))))
+        ;(pprint (set/difference ks as))
+        ))
 
     (testing "txn from"
       (is (->> (:txn ops-by-f) (every? (comp integer? :from :value)))))
