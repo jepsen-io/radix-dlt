@@ -25,40 +25,6 @@
   Elle--we need a lock to protect it."
   (Object.))
 
-(defn raw-txn-history
-  "Takes an analysis and rewrites its :txn and :raw-txn-log operations to look
-  like transactions operating on a single global list."
-  [{:keys [history] :as analysis}]
-  (->> history
-       (filter (comp #{:txn :raw-txn-log} :f))
-       (mapv (fn [{:keys [type f value] :as op}]
-               (case f
-                 ; For transactions, we rewrite them as a single append of the txn
-                 ; ID to a global key :log.
-                 :txn (if-let [id (:id value)]
-                        (assoc op :value [[:append :log (:id value)]])
-                        (assoc op :value []))
-
-                 ; And for raw-txn-log ops, we interpret them as reads.
-                 :raw-txn-log
-                 (assoc op :value [[:r :log (when value (vec value))]]))))))
-
-(defn raw-txn-checker
-  "The raw txn checker treats the raw txn log as a single strict-serializable
-  list, and every txn as an append to it."
-  []
-  (reify checker/Checker
-    (check [this test history {:keys [analysis] :as opts}]
-      (let [history (raw-txn-history analysis)
-            ;_       (pprint history)
-            elle    (append/checker
-                      {:consistency-models [:strict-serializable]})
-            opts    (assoc opts :subdirectory "raw-txn")
-            res     (locking elle-lock
-                      (checker/check elle test history opts))]
-        res))))
-
-
 (defn list-append-history
   "Takes an analysis and rewrites its history to look like an Elle list-append
   history.
@@ -177,7 +143,7 @@
   (->> op
        :value
        (map first)
-       (every? #{:append})))
+       (some #{:append})))
 
 (defrecord RealtimeNodeExplainer [realtime-graph node-graph pairs]
   elle/DataExplainer
@@ -245,13 +211,19 @@
   node-index`, compute realtime graphs over those, then merge them together. We
   *call* this a process order, because that way we can bring our existing
   anomaly detectors to bear, and it's sort of like treating the nodes, rather
-  than clients, as if they were processses."
+  than clients, as if they were processses.
+
+  Note that when transactions are submitted (via :f :txn) to one node, and
+  confirmed (via :f :check-txn) on another, we use the check-txn process
+  (recorded in the :txn op's :checked-by field) to determine the node."
   [test history]
   (let [node-count (count (:nodes test))]
     (->> history
          ; Partition by node
-         (group-by (fn group [{:keys [process]}]
-                     (mod process node-count)))
+         (group-by (fn group [{:keys [process checked-by] :as op}]
+                     ;(when checked-by
+                       ;(info "using checked-by " checked-by " instead of " process " for txn " (pr-str op)))
+                     (mod (or checked-by process) node-count)))
          vals
          ; Compute a realtime graph for each node separately
          (map elle-realtime-graph)
@@ -290,6 +262,15 @@
             ['...]
             (take-last (Math/floor (/ n 2)) coll))))
 
+(defn realtime+node-check
+  "Runs an Elle checker, but with the realtime graph redefined to only hold
+  between operations on single nodes, rather than across all operations."
+  [elle-checker test history opts]
+  (locking elle-lock
+    (with-redefs [elle.core/realtime-graph
+                  (partial realtime+node-graph test)]
+      (checker/check elle-checker test history opts))))
+
 (defn list-append-checker
   "We'd like to ensure that our transactions are serializable, (and ideally,
   that writes are strict-serializable). Elle has extension points for writing
@@ -322,34 +303,56 @@
                               :consistency-models [:strict-serializable]})]
     (reify checker/Checker
       (check [this test history {:keys [analysis] :as opts}]
-        (let [la-history (list-append-history analysis)]
-          ;(info :history (pprint-str (take 100 la-history)))
-          ; Oh this is such a gross hack. There's all this *really* nice,
-          ; sophisticated machinery for detecting various anomalies in
-          ; elle.txn, but it all assumes the builtin realtime/process graphs.
-          ; Instead of redefining all the anomaly types for our own weird
-          ; temporal model, we're going to sneak in there and redefine how Elle
-          ; computes its realtime graph.
-          (let [res (locking elle-lock
-                      (with-redefs [elle.core/realtime-graph
-                                    (partial realtime+node-graph test)]
-                        (checker/check elle test la-history opts)))
-                ; As an extra piece of debugging info, we're going to record
-                ; how many reads went recognized/unrecognized.
-                balances           (filter (comp #{:balance} :f) la-history)
-                ok-balances        (filter (comp #{:ok} :type) balances)
-                info-balances      (filter (comp #{:info} :type) balances)
-                unresolvable-balances (filter (comp #{:unresolvable-balance} :error)
-                                           info-balances)
-                ambiguous-balances (filter (comp #{:ambiguous-balance} :error)
-                                           info-balances)]
+        (let [la-history (list-append-history analysis)
+              res        (realtime+node-check elle test la-history opts)
+              ; As an extra piece of debugging info, we're going to record
+              ; how many reads went recognized/unrecognized.
+              balances           (filter (comp #{:balance} :f) la-history)
+              ok-balances        (filter (comp #{:ok} :type) balances)
+              info-balances      (filter (comp #{:info} :type) balances)
+              unresolvable-balances (filter (comp #{:unresolvable-balance} :error)
+                                            info-balances)
+              ambiguous-balances (filter (comp #{:ambiguous-balance} :error)
+                                         info-balances)]
 
-            (assoc res
-                   :ok-balance-count           (count ok-balances)
-                   :unresolvable-balance-count (count unresolvable-balances)
-                   :ambiguous-balance-count    (count ambiguous-balances)
-                   :unresolvable-balances      (sample 6 unresolvable-balances)
-                   :ambiguous-balances         (sample 6 ambiguous-balances))))))))
+          (assoc res
+                 :ok-balance-count           (count ok-balances)
+                 :unresolvable-balance-count (count unresolvable-balances)
+                 :ambiguous-balance-count    (count ambiguous-balances)
+                 :unresolvable-balances      (sample 6 unresolvable-balances)
+                 :ambiguous-balances         (sample 6 ambiguous-balances)))))))
+
+(defn raw-txn-history
+  "Takes an analysis and rewrites its :txn and :raw-txn-log operations to look
+  like transactions operating on a single global list."
+  [{:keys [history] :as analysis}]
+  (->> history
+       (filter (comp #{:txn :raw-txn-log} :f))
+       (mapv (fn [{:keys [type f value] :as op}]
+               (case f
+                 ; For transactions, we rewrite them as a single append of the
+                 ; txn ID to a global key :log.
+                 :txn (if-let [id (:id value)]
+                        (assoc op :value [[:append :log (:id value)]])
+                        (assoc op :value []))
+
+                 ; And for raw-txn-log ops, we interpret them as reads.
+                 :raw-txn-log
+                 (assoc op :value [[:r :log (when value (vec value))]]))))))
+
+(defn raw-txn-checker
+  "The raw txn checker treats the raw txn log as a single strict-serializable
+  list, and every txn as an append to it."
+  []
+  (reify checker/Checker
+    (check [this test history {:keys [analysis] :as opts}]
+      (let [history (raw-txn-history analysis)
+            ;_       (pprint history)
+            elle    (append/checker
+                      {:consistency-models [:strict-serializable]})
+            opts    (assoc opts :subdirectory "raw-txn")
+            res     (realtime+node-check elle test history opts)]
+        res))))
 
 (defn inexplicable-balance-checker
   "Looks for cases where we can't explain how some balance was ever read."

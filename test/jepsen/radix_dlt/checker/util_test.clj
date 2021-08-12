@@ -214,9 +214,9 @@
            (rewrite-info-txns []))))
 
   (testing "basic"
-    ; Process is rewritten to the check-txn process
-    (is (= [{:index 0, :process 1, :type :invoke, :f :txn, :value {}}
-            {:index 3, :process 1, :type :ok, :f :txn, :value {:txn-id :x}}
+    (is (= [; Rewritten
+            {:index 0, :process 0, :type :invoke, :f :txn, :value {},           :checked-by 1}
+            {:index 3, :process 0, :type :ok,     :f :txn, :value {:txn-id :x}, :checked-by 1}
             ; Crashed before getting a txn-id; passed through
             {:index 4, :process 2, :type :invoke, :f :txn, :value {}}
             {:index 5, :process 2, :type :info, :f :txn, :value {}}
