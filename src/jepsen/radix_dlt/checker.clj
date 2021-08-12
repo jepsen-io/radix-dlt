@@ -547,9 +547,5 @@
         ; from reducing those.
         (let [history  (rewrite-info-txns history)
               analysis (analysis history test)]
-          ; As an aside: render perf plots off of the rewritten history in a
-          ; subdirectory.
-          (checker/check (checker/perf (:perf-opts test)) test history
-                         (assoc opts :subdirectory "rewritten"))
           (checker/check composed test history
                          (assoc opts :analysis analysis)))))))
