@@ -503,9 +503,9 @@
               n (count h)
               i (- n (count history))]
           (warn "Giving up on inexplicable-balance check of account" account
-                " at " i "/" n "operations into the history:"
-                (into (sorted-set) unlogged-deltas)
-                " has exceeded " inexplicable-balance-max-unlogged
+                "at " i "/" n "operations into the history;"
+                ;(into (sorted-set) unlogged-deltas)
+                "exceeded" inexplicable-balance-max-unlogged
                 "unlogged deltas")
           inexplicable)
 
