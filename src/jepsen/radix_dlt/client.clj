@@ -620,3 +620,40 @@
              :query {:type "resource"
                      :value "01" ; XRD
                      }}))
+
+(defmacro with-errors
+  "Takes an operation and a body. Evaluates body, converting known exceptions to fail/info operations."
+  [op & body]
+  `(try+ ~@body
+         (catch [:type :timeout] e#
+           (assoc ~op :type :info, :error :timeout))
+         (catch [:type :txn-prep-failed] e#
+           (assoc ~op :type :fail
+                  :error [:txn-prep-failed (.getMessage (:cause ~'&throw-context))]))
+         (catch [:type :radix-dlt/failure, :code 1004] e#
+           (condp re-find (:message e#)
+             #"header parser received no bytes"
+             (assoc ~op :type :info, :error [:header-empty (:message e#)])
+
+             #"Connection refused"
+             ; Slow these down juust a tad so we can focus on live nodes.
+             (do (Thread/sleep 1000)
+                 (assoc ~op :type :fail, :error [:conn-refused (:message e#)]))
+
+             #"request timed out"
+             (assoc ~op :type :info, :error [:request-timed-out (:message e#)])
+
+             (throw+ e#)))
+         (catch [:type :radix-dlt/failure, :code 1500] e#
+           (assoc ~op :type :fail, :error [:substate-not-found
+                                           (:message e#)]))
+         (catch [:type :radix-dlt/failure, :code 1604] e#
+           (assoc ~op :type :fail, :error [:parse-error (:message e#)]))
+         (catch [:type :radix-dlt/failure, :code 2515] e#
+           (assoc ~op :type :fail, :error :insufficient-balance))
+
+         ; clj-http errors when we call things directly via jsonrpc
+         (catch [:status 404] e#
+           (assoc ~op :type :fail, :error :not-found))
+         (catch [:status 500] e#
+           (assoc ~op :type :info, :error [:http-500 (:body e#)]))))

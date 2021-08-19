@@ -9,7 +9,13 @@
             [jepsen.os.debian :as debian]
             [jepsen.radix-dlt [db :as db]
                               [nemesis :as nemesis]
-                              [workload :as workload]]))
+                              [workload :as workload]
+                              [double-spend :as double-spend]]))
+
+(def workloads
+  "A map of workload names to workload constructor functions."
+  {:double-spend double-spend/workload
+   :list-append  workload/workload})
 
 (def fs
   "A set of all (logical) functions we use to interact with Radix"
@@ -58,7 +64,8 @@
 (defn radix-test
   "Constructs a Radix-DLT test from parsed CLI options."
   [opts]
-  (let [workload  (workload/workload opts)
+  (let [workload-name (:workload opts :list-append)
+        workload  ((workloads workload-name) opts)
         db        (db/db)
         nemesis   (nemesis/package
                     {:db db
@@ -73,7 +80,7 @@
            opts
            {:os               debian/os
             :db               db
-            :name             (str "radix "
+            :name             (str (name workload-name) " "
                                    (:version opts) " "
                                    (pr-str (:nemesis opts)))
             :pure-generators  true
@@ -147,13 +154,18 @@
     :parse-fn read-string
     :validate [#(and (number? %) (pos? %)) "must be a positive number"]]
 
+   ["-w" "--workload NAME" "Which workload should we run?"
+    :parse-fn keyword
+    :validate [workloads (cli/one-of workloads)]]
+
    [nil "--zip ZIPFILE" "Path to a local radixdlt-dist-<whatever>.zip file to install, rather than using --version. Helpful if you want to test a feature branch or one-off build."]
    ])
 
 (defn all-tests
   "Takes parsed CLI options and constructs a sequence of tests from them."
   [opts]
-  (let [nemeses (if (nil? (:nemesis opts))
+  (let [workloads (:workload opts (keys workloads))
+        nemeses (if (nil? (:nemesis opts))
                   standard-nemeses
                   [#{}])
         tests (->> (for [i (range (:test-count opts)), nemesis nemeses]
