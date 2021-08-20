@@ -81,7 +81,7 @@
            {:os               debian/os
             :db               db
             :name             (str (name workload-name) " "
-                                   (:version opts) " "
+                                   (or (:zip opts) (:version opts)) " "
                                    (pr-str (:nemesis opts)))
             :pure-generators  true
             :client           (:client workload)
