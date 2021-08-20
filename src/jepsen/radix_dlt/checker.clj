@@ -42,7 +42,7 @@
   [{:keys [accounts history pair-index] :as analysis}]
   ;(info :account->balance->txn-ids
   ;      (pprint-str account->balance->txn-ids))
-  (mapv (fn [{:keys [type f value] :as op}]
+  (mapv (fn xform-op [{:keys [type f value] :as op}]
           (case f
             :txn
             (let [id  (:id value)
@@ -59,7 +59,7 @@
             ; to the rest of our balance inference process.
             :raw-txn-log
             (->> (keys accounts)
-                 (map (fn [acct]
+                 (map (fn raw-txn-log->txn [acct]
                         (let [txn-ids (-> accounts (get acct) :txn-ids)
                               ; Filter the log to only involved txn IDs
                               sublog  (->> value
@@ -122,7 +122,7 @@
                   ; reads those. Unresolvable and ambiguous balances we just
                   ; skip over.
                   txn (->> (keys accounts)
-                           (keep (fn [acct]
+                           (keep (fn raw-balances->txn [acct]
                                    (let [balance (get value' acct)
                                          ids     (balance->txn-id-prefix
                                                    analysis acct balance)]
