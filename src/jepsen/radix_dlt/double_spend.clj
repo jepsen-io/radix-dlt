@@ -192,9 +192,9 @@
     ; Then we can execute the payment and stash either concurrently or
     ; sequentially
     (rand-nth [
-               ;[{:f :pay} {:f :stash}]
-               ;[{:f :stash} {:f :pay}]
-               ;(single-threaded [{:f :pay} {:f :stash}])
+               [{:f :pay} {:f :stash}]
+               [{:f :stash} {:f :pay}]
+               (single-threaded [{:f :pay} {:f :stash}])
                (single-threaded [{:f :stash} {:f :pay}])
                ])))
 
