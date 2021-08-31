@@ -3,7 +3,8 @@
   (:require [clojure [pprint :refer [pprint]]]
             [clojure.tools.logging :refer [info warn]]
             [elle [core :as elle]
-                  [graph :as g]]
+                  [graph :as g]
+                  [list-append :as list-append]]
             [jepsen [checker :as checker]
                     [util :as util :refer [map-vals
                                            parse-long
@@ -525,27 +526,63 @@
                           vec)
                      (assoc opts :subdirectory "txn-perf")))))
 
+(defn raw-txn-log-compatible-orders
+  "A checker which looks only at :raw-txn-log operations and verifies they all
+  have compatible orders."
+  []
+  (reify checker/Checker
+    (check [this test history opts]
+      (let [logs (->> history
+                      (filter (comp #{:raw-txn-log} :f))
+                      (filter op/ok?)
+                      (map :value)
+                      (sort-by count)
+                      distinct)
+            incompatible (list-append/incompatible-orders {:log logs})]
+        (if incompatible
+          {:valid? false
+           :incompatible incompatible}
+          {:valid? true})))))
+
 (defn checker
   "Unified checker."
   []
-  (let [composed (checker/compose
-                   {:stats        (stats)
-                    :faithful     (faithful-checker)
-                    :negative     (negative-checker)
-                    :inexplicable (inexplicable-balance-checker)
-                    :list-append  (list-append-checker)
-                    :raw-txn      (raw-txn-checker)
-                    :balance-vis  (balance-vis-checker)
-                    :timeline     (timeline/html)
-                    :txn-perf     (txn-perf)})]
-    ; We want to compute the analysis just once, and let every checker use it
-    ; independently.
-    (reify checker/Checker
-      (check [this test history opts]
-        ; We start by rewriting info txns using check-txn operations--we're
-        ; going to hit a *ton* of timeouts, and basically everything benefits
-        ; from reducing those.
-        (let [history  (rewrite-info-txns history)
-              analysis (analysis history test)]
-          (checker/check composed test history
-                         (assoc opts :analysis analysis)))))))
+  (reify checker/Checker
+    (check [this test history opts]
+      (let [; Checkers we always run
+            base-checkers {:stats     (stats)
+                           :txn-perf  (txn-perf)}
+            ; Our particular checker
+            checker (if ; We're JUST doing compatible orders--the full
+                      ; analysis is super expensive over raw txn logs, and
+                      ; we're looking for rare anomalies so we need to be
+                      ; able to test longer histories here.
+                      (:check-only-raw-txn-log-compatible-orders test)
+                      (assoc base-checkers
+                             :raw-txn-log-compatible-orders
+                             (raw-txn-log-compatible-orders))
+
+                      ; The full suite
+                      (assoc base-checkers
+                             :faithful     (faithful-checker)
+                             :negative     (negative-checker)
+                             :inexplicable (inexplicable-balance-checker)
+                             :list-append  (list-append-checker)
+                             :raw-txn      (raw-txn-checker)
+                             :balance-vis  (balance-vis-checker)
+                             :timeline     (timeline/html)))
+            checker (checker/compose checker)
+
+            ; We start by rewriting info txns using check-txn operations--we're
+            ; going to hit a *ton* of timeouts, and basically everything
+            ; benefits from reducing those.
+            history  (rewrite-info-txns history)]
+        (if (:check-only-raw-txn-log-compatible-orders test)
+          ; We're trying to do this as quick as possible; don't even both with
+          ; analysis phase.
+          (checker/check checker test history opts)
+
+          ; When we're doing the full analysis, we want to compute the
+          ; analysis just once, and let every checker use it independently.
+          (checker/check checker test history
+                         (assoc opts :analaysis (analysis history test))))))))
