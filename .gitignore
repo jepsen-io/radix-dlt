@@ -10,6 +10,7 @@ pom.xml.asc
 *.swp
 *.jar
 *.class
+*.zip
 /.lein-*
 /.nrepl-port
 /.prepl-port
