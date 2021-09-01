@@ -13,7 +13,8 @@
                               [nemesis :as nemesis]
                               [workload :as workload]
                               [double-spend :as double-spend]
-                              [util :as u]]))
+                              [util :as u]])
+  (:import (com.radixdlt.identifiers AccountAddressing)))
 
 (def workloads
   "A map of workload names to workload constructor functions."
@@ -187,7 +188,11 @@
            (let [key-pair (rc/new-key-pair)]
              (-> {:private-base64 (-> key-pair rc/private-key u/bytes->base64)
                   :public-hex     (-> key-pair rc/public-key .toHex)
-                  :address-hex    (-> key-pair rc/->account-address .getAddress str)}
+                  :address-hex    (-> key-pair rc/->account-address .getAddress str)
+                  :address-bech32 (->> key-pair
+                                       rc/->account-address
+                                       .getAddress
+                                       (.of (AccountAddressing/bech32 "tdx")))}
                  pprint)))}})
 
 (defn -main

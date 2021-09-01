@@ -5,15 +5,22 @@
             :url "https://www.eclipse.org/legal/epl-2.0/"}
   :repositories [["jitpack" "https://jitpack.io"]]
   :dependencies [[org.clojure/clojure "1.10.3"]
+
                  [cheshire "5.10.0"
                   :exclusions [com.fasterxml.jackson.core/jackson-core
                                com.fasterxml.jackson.dataformat/jackson-dataformat-cbor]]
                  [clj-http "3.12.0"
                   :exclusions [commons-codec]]
-                 [com.radixdlt/radixdlt-java "1.0-beta.40-release~1.0-beta.40-SNAPSHOT"]
+
+                 [com.radixdlt/radixdlt-java "1.0.0-feature~fix-user-token-balance-SNAPSHOT"
+                  ; This breaks clj-http's insecure? option
+                  :exclusions [org.bouncycastle/bcprov-jdk15to18]]
+
                  [jepsen/jepsen "0.2.5-SNAPSHOT"
                   :exclusions [com.fasterxml.jackson.core/jackson-core]]
+
                  [mvxcvi/clj-cbor "1.1.0"]
+
                  ; Types
                  [org.clojure.typed/runtime.jvm "1.0.1"]]
   :profiles {:dev {:dependencies [[org.clojure.typed/checker.jvm "1.0.1"]]}}
