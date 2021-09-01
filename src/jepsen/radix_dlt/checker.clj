@@ -585,4 +585,4 @@
           ; When we're doing the full analysis, we want to compute the
           ; analysis just once, and let every checker use it independently.
           (checker/check checker test history
-                         (assoc opts :analaysis (analysis history test))))))))
+                         (assoc opts :analysis (analysis history test))))))))
