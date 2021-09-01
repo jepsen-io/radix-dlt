@@ -1,16 +1,19 @@
 (ns jepsen.radix-dlt.core
   "Top-level namespace: constructs tests and runs them at the CLI."
-  (:require [clojure [string :as str]]
+  (:require [clojure [string :as str]
+                     [pprint :refer [pprint]]]
             [jepsen [checker :as checker]
                     [cli :as cli]
                     [generator :as gen]
                     [tests :as tests]
                     [util :as util :refer [parse-long]]]
             [jepsen.os.debian :as debian]
-            [jepsen.radix-dlt [db :as db]
+            [jepsen.radix-dlt [client :as rc]
+                              [db :as db]
                               [nemesis :as nemesis]
                               [workload :as workload]
-                              [double-spend :as double-spend]]))
+                              [double-spend :as double-spend]
+                              [util :as u]]))
 
 (def workloads
   "A map of workload names to workload constructor functions."
@@ -175,6 +178,18 @@
                    (map radix-test))]
     tests))
 
+(defn keygen-cmd
+  "Command to generate a keypair."
+  []
+  {"keygen"
+   {:usage "Generates a fresh keypair and prints it as an EDN map."
+    :run (fn [{:keys [options]}]
+           (let [key-pair (rc/new-key-pair)]
+             (-> {:private-base64 (-> key-pair rc/private-key u/bytes->base64)
+                  :public-hex     (-> key-pair rc/public-key .toHex)
+                  :address-hex    (-> key-pair rc/->account-address .getAddress str)}
+                 pprint)))}})
+
 (defn -main
   "CLI entry point."
   [& args]
@@ -182,5 +197,6 @@
                                          :opt-spec  cli-opts})
                    (cli/test-all-cmd {:tests-fn     all-tests
                                       :opt-spec     cli-opts})
-                   (cli/serve-cmd))
+                   (cli/serve-cmd)
+                   (keygen-cmd))
             args))

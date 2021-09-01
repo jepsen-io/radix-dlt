@@ -7,6 +7,7 @@
             [clj-http.client :as http]
             [dom-top.core :as dt :refer [assert+]]
             [jepsen [util :as util :refer [pprint-str]]]
+            [jepsen.radix-dlt [util :as u]]
             [potemkin :refer [def-derived-map]]
             [slingshot.slingshot :refer [try+ throw+]])
   (:import ;(com.radixdlt.api.data.action UpdateValidatorMetadataAction)
@@ -212,7 +213,7 @@
 
 (defn ^ECKeyPair key-pair
   "Takes an integer id and returns a keypair. These correspond to hardcoded
-  keypair IDs in the dev universe: valid inputs are 1-5.
+  keypair IDs in the dev universe, which run from 1-10.
 
   Adapted from
   https://github.com/radixdlt/radixdlt/blob/1.0-beta.35.1/radixdlt-java/radixdlt-java/src/test/java/com/radixdlt/client/lib/impl/SynchronousRadixApiClientTest.java."
@@ -241,9 +242,7 @@
   ZCpcCF2EhnPBt774Y6UTZ5qSaIiPhfkBmr1zw9ZtklA=; a base64-encoded string from
   the generated universe) to an ECKeyPair."
   [^String base64-str]
-  (-> (Base64/getDecoder)
-      (.decode base64-str)
-      ECKeyPair/fromPrivateKey))
+  (-> base64-str u/base64->bytes ECKeyPair/fromPrivateKey))
 
 ;; Coercions for account & validator addresses
 

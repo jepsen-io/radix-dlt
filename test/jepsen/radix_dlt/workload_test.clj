@@ -6,7 +6,8 @@
             [jepsen [generator :as gen]
                     [util :as util]]
             [jepsen.generator.test :as gt]
-            [jepsen.radix-dlt [util :as u]
+            [jepsen.radix-dlt [accounts :as as]
+                              [util :as u]
                               [workload :as w]]))
 
 (defn keys-in
@@ -27,7 +28,7 @@
 (deftest gen-test
   (let [n                  10000
         max-writes-per-key 10
-        accounts (atom (w/initial-accounts))
+        accounts (atom (as/initial-accounts))
         rri      (doto (promise) (deliver "xrd_jepsen"))
         gen      (->> (w/generator! {:fs                 #{:balance :txn-log}
                                      :accounts           accounts

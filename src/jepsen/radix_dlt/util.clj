@@ -1,6 +1,7 @@
 (ns jepsen.radix-dlt.util
   "Kitchen sink for Radix stuff"
-  (:require [clojure.core.typed :as t]))
+  (:require [clojure.core.typed :as t])
+  (:import (java.util Base64)))
 
 (t/defalias Account
   "An Account ID is an integer."
@@ -31,3 +32,13 @@
   "Roughly how large are fees?"
   100000000000000000N)
 
+(defn ^bytes base64->bytes
+  "Converts a base64 string to byte array"
+  [^String base64]
+  (-> (Base64/getDecoder)
+      (.decode base64)))
+
+(defn bytes->base64
+  [^bytes bytes]
+  (-> (Base64/getEncoder)
+      (.encodeToString bytes)))
