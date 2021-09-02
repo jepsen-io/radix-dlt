@@ -12,8 +12,12 @@
                  [clj-http "3.12.0"
                   :exclusions [commons-codec]]
 
-                 [com.radixdlt/radixdlt-java "1.0.0-feature~fix-user-token-balance-SNAPSHOT"
-                  ; This breaks clj-http's insecure? option
+                 [com.radixdlt/radixdlt-java
+                  "1.0.0-feature~fix-user-token-balance-SNAPSHOT"
+                  ; For builds prior to ~Aug 25, 2021
+                  ;"1.0-beta.40-release~1.0-beta.40-SNAPSHOT"
+
+                  ; This breaks clj-http's insecure? option, so we leave it out
                   :exclusions [org.bouncycastle/bcprov-jdk15to18]]
 
                  [jepsen/jepsen "0.2.5-SNAPSHOT"
