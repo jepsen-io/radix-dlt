@@ -4,11 +4,14 @@
                      [pprint :refer [pprint]]]
             [jepsen [checker :as checker]
                     [cli :as cli]
+                    [db]
                     [generator :as gen]
                     [tests :as tests]
                     [util :as util :refer [parse-long]]]
+            [jepsen.nemesis.combined]
             [jepsen.os.debian :as debian]
-            [jepsen.radix-dlt [client :as rc]
+            [jepsen.radix-dlt [accounts :as a]
+                              [client :as rc]
                               [db :as db]
                               [nemesis :as nemesis]
                               [workload :as workload]
@@ -68,28 +71,44 @@
 (defn radix-test
   "Constructs a Radix-DLT test from parsed CLI options."
   [opts]
-  (let [workload-name (:workload opts :list-append)
-        workload  ((workloads workload-name) opts)
-        db        (db/db)
-        nemesis   (nemesis/package
-                    {:db db
-                     :nodes     (:nodes opts)
-                     :faults    (:nemesis opts)
-                     :partition {:targets (:partition-targets opts)}
-                     :clock     {:targets (:db-targets opts)}
-                     :pause     {:targets (:db-targets opts)}
-                     :kill      {:targets (:db-targets opts)}
-                     :interval  (:nemesis-interval opts)})]
+  (let [; Construct an initial account map, where account 1 is the main funding
+        ; account.
+        accounts (-> (a/accounts)
+                     (a/conj-account (if (:stokenet test)
+                                       (a/stokenet-account 1)
+                                       (a/small-account 1)))
+                     atom)
+        workload-name (:workload opts :list-append)
+        workload      ((workloads workload-name)
+                       (assoc opts :accounts accounts))
+        db            (if (:stokenet opts)
+                        jepsen.db/noop
+                        (db/db))
+        nemesis   (if (:stokenet opts)
+                    jepsen.nemesis.combined/noop
+                    (nemesis/package
+                      {:db db
+                       :nodes     (:nodes opts)
+                       :faults    (:nemesis opts)
+                       :partition {:targets (:partition-targets opts)}
+                       :clock     {:targets (:db-targets opts)}
+                       :pause     {:targets (:db-targets opts)}
+                       :kill      {:targets (:db-targets opts)}
+                       :interval  (:nemesis-interval opts)}))]
     (merge tests/noop-test
            opts
-           {:os               debian/os
+           {:accounts         accounts
+            :os               debian/os
             :db               db
             :name             (str (name workload-name) " "
-                                   (or (:zip opts) (:version opts)) " "
+                                   (or (when (:stokenet opts) "stokenet")
+                                       (:zip opts)
+                                       (:version opts)) " "
                                    (pr-str (:nemesis opts)))
             :pure-generators  true
             :client           (:client workload)
             :nemesis          (:nemesis nemesis)
+            :nonserializable-keys [:accounts]
             :checker          (checker/compose
                                 {:stats    (checker/stats)
                                  :workload (:checker workload)
@@ -141,6 +160,8 @@
     :default  40
     :parse-fn read-string
     :validate validate-non-neg]
+
+   [nil "--stokenet" "If enabled, tests against the public Stokenet rather than a local installation."]
 
    [nil "--validators COUNT" "Number of validators."
     :default  5

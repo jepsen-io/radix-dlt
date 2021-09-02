@@ -185,7 +185,8 @@
   ; Record account keys/IDs
   (->> (attack-accounts k)
        vals
-       (mapv (fn [id] (swap! accounts a/conj-small-account id))))
+       (map a/rand-account)
+       (mapv (partial swap! accounts a/conj-account)))
   (gen/phases
     ; First, one thread needs to prepare us
     (single-threaded (gen/until-ok (repeat {:f :prep})))

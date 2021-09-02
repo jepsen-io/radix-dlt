@@ -58,6 +58,13 @@ Which you can copy to any local path you like, then run
 lein run test ... --zip path/to/radixdlt-1.0.0-whatever-SNAPSHOT.zip
 ```
 
+## Testing Against Stokenet
+
+To run tests against the public Stokenet, you'll need an address with XRD. Run
+`lein run keygen` to construct a new account, and paste the results into
+`stokenet.edn`; then fund that account with some XRD. Running tests with
+`--stokenet` will use that account instead.
+
 ## License
 
 Copyright © 2021 Jepsen, LLC

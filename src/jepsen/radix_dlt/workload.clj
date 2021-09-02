@@ -13,10 +13,10 @@
             [slingshot.slingshot :refer [try+ throw+]]))
 
 (defn txn!
-  "Takes a client, an accounts map, an atom mapping radix txn ids to Jepsen txn
-  ids, and a :txn op. Executes the txn op and constructs a resulting op. As a
-  side effect, updates the radix->jepsen txn id map so that we can interpret
-  this txn ID when we read it in the future."
+  "Takes a client, an accounts map atom, an atom mapping radix txn ids to
+  Jepsen txn ids, and a :txn op. Executes the txn op and constructs a resulting
+  op. As a side effect, updates the radix->jepsen txn id map so that we can
+  interpret this txn ID when we read it in the future."
   [client accounts radix-txn-id->txn-id op]
   (letr [value (:value op)
          ; Map account IDs to addresses and add the token RRI to each op.
@@ -55,7 +55,7 @@
                            :pending    :info
                            :failed     :fail))))))
 
-(defrecord Client [conn node accounts token-rri radix-txn-id->txn-id]
+(defrecord Client [conn node token-rri radix-txn-id->txn-id]
   client/Client
   (open! [this test node]
     (assoc this
@@ -71,7 +71,7 @@
   (invoke! [this test {:keys [f value] :as op}]
     (rc/with-errors op
       (case f
-        :txn (txn! conn accounts radix-txn-id->txn-id op)
+        :txn (txn! conn (:accounts test) radix-txn-id->txn-id op)
 
         :check-txn
         (try+ (let [status (:status (rc/txn-status conn (:txn-id value)))]
@@ -89,7 +89,8 @@
               (throw+ e#))))
 
         :txn-log
-        (let [; A little helper: we want to translate addresses into numeric IDs
+        (let [accounts (:accounts test)
+              ; A little helper: we want to translate addresses into numeric IDs
               ; when we know them, but leave them as big hex strings otherwise
               address->id (fn [address]
                             (when address
@@ -111,7 +112,8 @@
           (assoc op :type :ok :value value'))
 
         :raw-balances
-        (let [res (rc/raw-balances node)
+        (let [accounts (:accounts test)
+              res (rc/raw-balances node)
               ; Map those balances back to a map of account IDs to balances.
               balances (->> (:entries res)
                             ; Rewrite known accounts to IDs
@@ -138,8 +140,8 @@
           (assoc op :type :ok, :value txn-ids))
 
         :balance
-        (let [b (->> (rc/token-balances conn (a/id->address @accounts
-                                                          (:account value)))
+        (let [b (->> (rc/token-balances conn (a/id->address @(:accounts test)
+                                                            (:account value)))
                      :balances
                      (filter (comp #{@token-rri} :rri))
                      first
@@ -155,9 +157,10 @@
   (reusable? [this test] true))
 
 (defn client
-  "Constructs a fresh Jepsen client. Takes an accounts atom and an rri promise"
-  [accounts token-rri]
-  (Client. nil nil accounts token-rri (atom {})))
+  "Constructs a fresh Jepsen client. Takes an rri promise for the default
+  token."
+  [token-rri]
+  (Client. nil nil token-rri (atom {})))
 
 ;; Generator
 
@@ -209,9 +212,10 @@
     ; If we've written it too much, replace it with a new key.
     (if (<= (:max-writes-per-key gen) writes)
       (let [k' (:next-key gen)
-            ki (.indexOf ^java.util.List (:key-pool gen) k)]
+            ki (.indexOf ^java.util.List (:key-pool gen) k)
+            acct (a/rand-account k')]
         ; Record this new account
-        (swap! (:accounts gen) a/conj-small-account k')
+        (swap! (:accounts gen) a/conj-account acct)
 
         (assoc gen
                :next-key     (inc k')
@@ -437,8 +441,9 @@
                       (take key-count)
                       vec)]
     ; Record initial keys as accounts
-    (doseq [k key-pool]
-      (swap! (:accounts opts) a/conj-small-account k))
+    (->> key-pool
+         (map a/rand-account)
+         (mapv (partial swap! (:accounts opts) a/conj-account)))
     ; And build generator
     (map->Generator
       {:accounts           (:accounts opts)
@@ -503,12 +508,12 @@
 (defn workload
   "Constructs a package of a client and generator."
   [opts]
-  (let [accounts  (atom (a/initial-accounts))
-        token-rri (promise)]
-    {:client          (client accounts token-rri)
+  (let [token-rri (promise)
+        accounts  (:accounts opts)]
+    {:client          (client token-rri)
      :checker         (rchecker/checker)
      :generator       (->> (assoc opts
-                                  :accounts accounts
+                                  :accounts  accounts
                                   :token-rri token-rri)
                            generator!
                            check-txn-generator)
