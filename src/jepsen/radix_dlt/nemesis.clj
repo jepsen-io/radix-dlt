@@ -125,7 +125,7 @@
            :validators (set (:nodes test))
            ; Keep a client for each node.
            :clients (->> (:nodes test)
-                         (map (juxt identity rc/open))
+                         (map (juxt identity (partial rc/open test)))
                          (into {}))))
 
   (node-view [this test node]

@@ -6,6 +6,7 @@
                     [cli :as cli]
                     [db]
                     [generator :as gen]
+                    [os]
                     [tests :as tests]
                     [util :as util :refer [parse-long]]]
             [jepsen.nemesis.combined]
@@ -74,13 +75,16 @@
   (let [; Construct an initial account map, where account 1 is the main funding
         ; account.
         accounts (-> (a/accounts)
-                     (a/conj-account (if (:stokenet test)
+                     (a/conj-account (if (:stokenet opts)
                                        (a/stokenet-account 1)
                                        (a/small-account 1)))
                      atom)
         workload-name (:workload opts :list-append)
         workload      ((workloads workload-name)
                        (assoc opts :accounts accounts))
+        os            (if (:stokenet opts)
+                        jepsen.os/noop
+                        debian/os)
         db            (if (:stokenet opts)
                         jepsen.db/noop
                         (db/db))
@@ -95,38 +99,42 @@
                        :pause     {:targets (:db-targets opts)}
                        :kill      {:targets (:db-targets opts)}
                        :interval  (:nemesis-interval opts)}))]
-    (merge tests/noop-test
-           opts
-           {:accounts         accounts
-            :os               debian/os
-            :db               db
-            :name             (str (name workload-name) " "
-                                   (or (when (:stokenet opts) "stokenet")
-                                       (:zip opts)
-                                       (:version opts)) " "
-                                   (pr-str (:nemesis opts)))
-            :pure-generators  true
-            :client           (:client workload)
-            :nemesis          (:nemesis nemesis)
-            :nonserializable-keys [:accounts]
-            :checker          (checker/compose
-                                {:stats    (checker/stats)
-                                 :workload (:checker workload)
-                                 :perf     (checker/perf
-                                             {:nemeses (:perf nemesis)})
-                                 :ex       (checker/unhandled-exceptions)})
-            :perf-opts        {:nemeses (:perf nemesis)}
-            :generator        (gen/phases
-                                (->> (:generator workload)
-                                     (gen/stagger (/ (:rate opts)))
-                                     (gen/nemesis (:generator nemesis))
-                                     (gen/time-limit (:time-limit opts)))
-                                (gen/nemesis (:final-generator nemesis))
-                                (gen/log (str "Waiting "
-                                              (:recovery-time opts)
-                                              " seconds for recovery..."))
-                                (gen/sleep (:recovery-time opts))
-                                (gen/clients (:final-generator workload)))})))
+    (cond->
+      (merge tests/noop-test
+             opts
+             {:accounts         accounts
+              :os               os
+              :db               db
+              :name             (str (name workload-name) " "
+                                     (or (when (:stokenet opts) "stokenet")
+                                         (:zip opts)
+                                         (:version opts)) " "
+                                     (pr-str (:nemesis opts)))
+              :pure-generators  true
+              :client           (:client workload)
+              :nemesis          (:nemesis nemesis)
+              :nonserializable-keys [:accounts]
+              :checker          (checker/compose
+                                  {:stats    (checker/stats)
+                                   :workload (:checker workload)
+                                   :perf     (checker/perf
+                                               {:nemeses (:perf nemesis)})
+                                   :ex       (checker/unhandled-exceptions)})
+              :perf-opts        {:nemeses (:perf nemesis)}
+              :generator        (gen/phases
+                                  (->> (:generator workload)
+                                       (gen/stagger (/ (:rate opts)))
+                                       (gen/nemesis (:generator nemesis))
+                                       (gen/time-limit (:time-limit opts)))
+                                  (gen/nemesis (:final-generator nemesis))
+                                  (gen/log (str "Waiting "
+                                                (:recovery-time opts)
+                                                " seconds for recovery..."))
+                                  (gen/sleep (:recovery-time opts))
+                                  (gen/clients (:final-generator workload)))})
+
+      ; For stokenet, we're not going to be able to log in to any nodes.
+      (:stokenet opts) (assoc-in [:ssh :dummy?] true))))
 
 (def validate-non-neg
   [#(and (number? %) (not (neg? %))) "Must be non-negative"])

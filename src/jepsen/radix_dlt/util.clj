@@ -28,9 +28,12 @@
   balance. We use this to filter out balance reads of these spurious accounts."
   (disj (set default-account-ids) 1))
 
-(def fee-scale
+(defn fee-scale
   "Roughly how large are fees?"
-  100000000000000000N)
+  [test]
+  (if (:stokenet test)
+    100000000000000000N
+    100000000000000000N))
 
 (defn ^bytes base64->bytes
   "Converts a base64 string to byte array"

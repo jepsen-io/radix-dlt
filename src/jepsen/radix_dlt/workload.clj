@@ -60,7 +60,7 @@
   (open! [this test node]
     (assoc this
            :node node
-           :conn (rc/open node)))
+           :conn (rc/open test node)))
 
   (setup! [this test]
     ; Fetch the native token RRI
@@ -149,7 +149,21 @@
               value' (assoc value :balance b)]
           (assoc op :type :ok, :value value')))))
 
-  (teardown! [this test])
+  (teardown! [this test]
+    (when (:stokenet test)
+      (let [accounts @(:accounts test)
+            _ (info "I'd like to drain accounts:"
+                    (->> accounts :accounts (map :id) (remove #{1})))
+            to (a/id->key-pair accounts 1)]
+        (->> (:accounts accounts)
+             (remove (comp #{1} :id))
+             (mapv (fn [{:keys [id key-pair]}]
+                     (info :draining id
+                           (rc/->clj (rc/->account-address key-pair)))
+                     (try+
+                       (rc/drain! conn test key-pair to)
+                       ; Avoid being throttled during this phase
+                       (Thread/sleep 1000))))))))
 
   (close! [this test])
 
@@ -215,7 +229,10 @@
             ki (.indexOf ^java.util.List (:key-pool gen) k)
             acct (a/rand-account k')]
         ; Record this new account
-        (swap! (:accounts gen) a/conj-account acct)
+        (try+ (swap! (:accounts gen) a/conj-account acct)
+              (catch [:type :account-already-exists] e
+                ; This is fine; we just need SOME account with this ID.
+                ))
 
         (assoc gen
                :next-key     (inc k')
@@ -236,7 +253,7 @@
   "Takes a generator. Generates a series of transfer actions, and returns
   [transfer gen'], where gen' records the writes of keys involved in the
   transfer. As a side effect, updates the account structure with any new keys."
-  [gen]
+  [test gen]
   (let [; What account is performing this transaction?
         from  (gen-rand-key gen)
         ; Is this account funded? If not, let's replace it with the default
@@ -257,11 +274,13 @@
                                     ; If this is the first write, give them a
                                     ; bunch to play with; otherwise almost
                                     ; every transfer will fail.
-                                    (-> 100 rand-int inc (* u/fee-scale 10))
+                                    (-> 100 rand-int inc
+                                        (* 10 (u/fee-scale test)))
 
                                     ; For transfers between normal accounts,
                                     ; pick 1-100x fee
-                                    (-> 100 rand-int inc (* u/fee-scale)))
+                                    (-> 100 rand-int inc
+                                        (* (u/fee-scale test))))
                           :rri    @(:token-rri gen)})))
         ; What accounts are we touching?
         tos   (set (map :to ops))
@@ -350,7 +369,7 @@
                        rand-nth))
               op (assoc op :f f)]
           (case f
-            :txn (let [[transfer gen'] (gen-transfer! this)]
+            :txn (let [[transfer gen'] (gen-transfer! test this)]
                    [(assoc op :value transfer)
                     gen'])
 
@@ -512,11 +531,15 @@
         accounts  (:accounts opts)]
     {:client          (client token-rri)
      :checker         (rchecker/checker)
-     :generator       (->> (assoc opts
-                                  :accounts  accounts
-                                  :token-rri token-rri)
-                           generator!
-                           check-txn-generator)
+     :generator       (gen/phases
+                        ; We need to start off by reading the balance of
+                        ; account 1---in Stokenet, it might be auto-populated.
+                        {:f :balance, :value {:account 1}}
+                        (->> (assoc opts
+                                    :accounts  accounts
+                                    :token-rri token-rri)
+                             generator!
+                             check-txn-generator))
      :final-generator [(when (get (:fs opts) :raw-txn-log) {:f :raw-txn-log})
                        (when (get (:fs opts) :txn-log)
                          (delay

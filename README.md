@@ -17,18 +17,20 @@ Compile and install each part of the client library. This apparently only builds
 cd radixdlt-engine
 echo "apply plugin: 'maven'" >> build.gradle
 ../gradlew install
-```
 
-```
 cd ../radixdlt-java-common/
 echo "apply plugin: 'maven'" >> build.gradle
 ../gradlew install
-```
 
-```
 cd ../radixdlt-java/radixdlt-java
 echo "apply plugin: 'maven'" >> build.gradle
 ../../gradlew install
+```
+
+To see the exact version this installed, check:
+
+```
+ls ~/.m2/repository/com/radixdlt/radixdlt-java/
 ```
 
 ## Usage
@@ -64,6 +66,11 @@ To run tests against the public Stokenet, you'll need an address with XRD. Run
 `lein run keygen` to construct a new account, and paste the results into
 `stokenet.edn`; then fund that account with some XRD. Running tests with
 `--stokenet` will use that account instead.
+
+We don't have access to the raw txn APIs, so you'll need to run with
+
+`--fs txn-log,balance`
+
 
 ## License
 

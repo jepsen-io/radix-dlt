@@ -470,7 +470,7 @@ export RADIXDLT_VALIDATOR_2_PRIVKEY=UCZRvnk5Jm9hEbpiingYsx7tbjf3ASNLHDf3BLmFaps=
     ; Hack: even though the /node is ready, the client api might take
     ; longer, and we'll get weird parse errors when HTML shows up instead
     ; of JSON
-    (rc/await-initial-convergence node))
+    (rc/await-initial-convergence test node))
 
   (teardown! [this test node]
     (db/kill! this test node)
@@ -523,7 +523,7 @@ export RADIXDLT_VALIDATOR_2_PRIVKEY=UCZRvnk5Jm9hEbpiingYsx7tbjf3ASNLHDf3BLmFaps=
     ; Our notion of a primary node is one with a supermajority of the total
     ; stake.
     (try+
-      (let [client      (rc/open (rand-nth (:nodes test)))
+      (let [client      (rc/open test (rand-nth (:nodes test)))
             validators  (rc/validators client)
             total-stake (->> validators
                              (map :total-delegated-stake)

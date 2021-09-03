@@ -13,11 +13,33 @@
                   :exclusions [commons-codec]]
 
                  [com.radixdlt/radixdlt-java
-                  "1.0.0-feature~fix-user-token-balance-SNAPSHOT"
+                  ; For testing Stokenet circa Sept 2, 2021 (which can't talk
+                  ; to new clients because the definition of tokeninfo JSON
+                  ; responses changed and the client isn't backwards
+                  ; compatible, except that the actual client for Stokenet's
+                  ; version ALSO can't talk to Stokenet, because it doesn't
+                  ; handle network IDs correctly when deserializing addresses
+                  ; for e.g. balance requests. This is fix-user-token-balance,
+                  ; which includes the fixes for that issue, but with the 1.0.1
+                  ; definition of TokenInfo.java, so we can deserialize the
+                  ; older JSON requests.
+                  ;
+                  ; VERSIONIIIIIIING
+                  "1.0.0-feature~fix-user-token-balance-1.0.1-compat-SNAPSHOT"
+
+                  ; For testing the fix-user-token-balance branch circa August
+                  ; 25, 2021
+                  ;"1.0.0-feature~fix-user-token-balance-SNAPSHOT"
+
                   ; For builds prior to ~Aug 25, 2021
                   ;"1.0-beta.40-release~1.0-beta.40-SNAPSHOT"
 
-                  ; This breaks clj-http's insecure? option, so we leave it out
+                  ; For stokenet???
+                  ;"1.0.0-release~1.0.0-SNAPSHOT"
+
+                  ; This breaks clj-http's insecure? option by registering
+                  ; something in the guts of Java's SSL context machinery, so
+                  ; we leave it out
                   :exclusions [org.bouncycastle/bcprov-jdk15to18]]
 
                  [jepsen/jepsen "0.2.5-SNAPSHOT"

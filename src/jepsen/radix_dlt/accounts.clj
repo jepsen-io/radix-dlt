@@ -54,7 +54,7 @@
     (let [stokenet (edn/read-string (slurp "stokenet.edn"))
           private  (:private-base64 stokenet)
           _ (assert private "No :private-base64 key in stokenet.edn!")
-          key-pair (rc/private-key-str->key-pair)]
+          key-pair (rc/private-key-str->key-pair private)]
       {:id        id
        :key-pair  key-pair
        :address   (rc/->account-address key-pair)})))

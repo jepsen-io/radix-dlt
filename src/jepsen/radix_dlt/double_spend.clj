@@ -71,7 +71,7 @@
 (defrecord Client [conn node accounts token-rri]
   client/Client
   (open! [this test node]
-    (assoc this :node node :conn (rc/open node)))
+    (assoc this :node node :conn (rc/open test node)))
 
   (setup! [this test]
     ; Fetch the native token RRI

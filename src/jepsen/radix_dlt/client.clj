@@ -48,7 +48,17 @@
            (java.util.function Function)
            (org.bouncycastle.util.encoders Hex)))
 
-(def test-network-id 99)
+;(def stokenet-network-id
+;  2)
+
+;(def local-network-id
+;  99)
+
+(def current-network-id
+  "We need this network ID to deserialize responses. We fill it in upon first
+  connection to any network--this prevents us from testing multiple networks in
+  the same JVM, but... ah well. It's a hack."
+  (promise))
 
 (defprotocol ToClj
   "Transforms RadixDLT client types into Clojure structures."
@@ -256,7 +266,7 @@
 
   String
   (->account-address [x]
-    (let [readdr (-> (com.radixdlt.networks.Addressing/ofNetworkId test-network-id)
+    (let [readdr (-> (com.radixdlt.networks.Addressing/ofNetworkId @current-network-id)
                      .forAccounts
                      (.parse x))]
       (AccountAddress/create readdr))))
@@ -270,7 +280,7 @@
 
   String
   (->validator-address [s]
-    (-> (com.radixdlt.networks.Addressing/ofNetworkId test-network-id)
+    (-> (com.radixdlt.networks.Addressing/ofNetworkId @current-network-id)
         .forValidators
         (.parse s)
         ->validator-address))
@@ -306,12 +316,19 @@
     clojure.lang.BigInt (UInt256/from (str n))
     Long                (UInt256/from ^long n)))
 
+(declare network-id)
+
 (defn ^RadixApi open
-  "Opens a connection to a node."
-  [node]
-  (->clj (RadixApi/connect
-           (str "http://" node))))
-           ;(HttpClients/getSslAllTrustingClient))))
+  "Opens a connection to a node. As a side effect, delivers the current network
+  ID."
+  [test node]
+  (let [client (->clj
+                 (if (:stokenet test)
+                   (RadixApi/connect (str "https://" node) 443 443)
+                   (RadixApi/connect (str "http://" node))))]
+    (when-not (realized? current-network-id)
+      (deliver current-network-id (network-id client)))
+    client))
 
 ;; API operations
 
@@ -327,8 +344,8 @@
 
 (defn token-balances
   "Looks up the token balances of a given address."
-  [^RadixApi client ^AccountAddress address]
-  (-> client .account (.balances address) ->clj))
+  [^RadixApi client address]
+  (-> client .account (.balances (->account-address address)) ->clj))
 
 (defn ^TransactionRequest txn-request
   "Builds a new transaction request. Takes a from account address, a message
@@ -342,16 +359,21 @@
     (reduce (fn [^TransactionRequest$TransactionRequestBuilder builder action]
               (case (first action)
                 :transfer (let [[_ from to amount rri] action]
-                            (.transfer builder from to (uint256 amount) rri))
+                            (.transfer builder
+                                       (->account-address from)
+                                       (->account-address to)
+                                       (uint256 amount)
+                                       rri))
 
                 :stake    (let [[_ from validator amount] action]
                             (.stake builder
-                                    from
+                                    (->account-address from)
                                     (->validator-address validator)
                                     (uint256 amount)))
 
                 :unstake  (let [[_ from validator amount] action]
-                            (.unstake builder from
+                            (.unstake builder
+                                      (->account-address from)
                                       (->validator-address validator)
                                       (uint256 amount)))))
             (.. (TransactionRequest/createBuilder (->account-address from))
@@ -494,6 +516,28 @@
   (let [prepped (prep-txn client key-pair message actions)]
     (submit-txn! client (:finalized prepped))))
 
+(defn drain!
+  "Tries to empty (or close to it) one account into another. Helpful for
+  cleaning up temporary accounts at the end of a test on Stokenet. to-address
+  can be anything convertible to an address. Synchronous."
+  [client test from-key-pair to-address]
+  (let [ops (->> (token-balances client from-key-pair)
+                 :balances
+                 (keep (fn [{:keys [rri amount]}]
+                         ;(info :rri rri :amount amount)
+                         (let [transfer-amount (- amount
+                                                  (* 2 (u/fee-scale test)))]
+                           ;(info :transfer-amount transfer-amount)
+                           (when (pos? transfer-amount)
+                             [:transfer from-key-pair to-address
+                              transfer-amount rri])))))]
+    (when (seq ops)
+      ; (info :actions ops)
+      (let [txn (txn! client from-key-pair "drain" ops)]
+        (assert+ (= :confirmed (:status @(:status txn)))
+                 (assoc @(:status txn)
+                        :type :txn-unconfirmed))))))
+
 (defn paginated
   "Takes a function (chunk cursor), where cursor is an Optional<Cursor>, where
   `chunk` returns something which can be coerced via ->clj to a map of {:cursor
@@ -548,9 +592,9 @@
   really ready to process transactions yet, but it *is* responding to API
   requests. We use this function to perform an initial no-op transaction as a
   part of DB setup, and ensure that the DB's all ready to go."
-  [node]
+  [test node]
   (info "Waiting for initial convergence...")
-  (let [client (open node)]
+  (let [client (open test node)]
     ; We choose key 5 here so as not to interfere with key 1, which the
     ; workload uses extensively. This simplifies our checker: key 1 won't have
     ; any initial balance-changing transactions to factor into account.
