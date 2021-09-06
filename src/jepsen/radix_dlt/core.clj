@@ -124,7 +124,9 @@
               :generator        (gen/phases
                                   (->> (:generator workload)
                                        (gen/stagger (/ (:rate opts)))
-                                       (gen/nemesis (:generator nemesis))
+                                       (gen/nemesis
+                                         (gen/phases (gen/sleep 10)
+                                                     (:generator nemesis)))
                                        (gen/time-limit (:time-limit opts)))
                                   (gen/nemesis (:final-generator nemesis))
                                   (gen/log (str "Waiting "

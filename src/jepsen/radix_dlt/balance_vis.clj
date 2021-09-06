@@ -24,7 +24,7 @@
             [hiccup.core :as h]
             [knossos.history :as history]
             [jepsen [store :as store]
-                    [util :as util :refer [name+ pprint-str]]]
+                    [util :as util :refer [name+ pprint-str nanos->secs]]]
             [jepsen.checker.timeline :as timeline]
             [jepsen.radix-dlt.checker.util :refer [balance->txn-id-prefix
                                                    txn-id
@@ -220,6 +220,77 @@
                  pairs)]]])
        (spit (store/path! test "accounts" (str account "-timeline.html"))))))
 
+(def txn-logs-stylesheet
+  "CSS styles for the txn-logs visualization"
+  "")
+
+(defn rand-bg-color
+  "Hashes anything and assigns a lightish hex color to it--helpful for
+  highlighting different values differently."
+  [x]
+  (let [h (hash x)
+        ; Break up hash into 3 8-bit chunks
+        r (bit-and 255 h)
+        g (-> h (bit-and 65280)    (bit-shift-right 8))
+        b (-> h (bit-and 16711680) (bit-shift-right 16))
+        ; Squeeze these values into the range 130-250, so they're not too dark
+        ; to read, but not pure white (which would disappear).
+        ceil     250
+        floor    130
+        range    (- ceil floor)
+        compress (fn compress [x]
+                   (-> x (/ 255) (* range) (+ floor) short))
+        r (compress r)
+        g (compress g)
+        b (compress b)]
+    (str "#"
+         (format "%02x" r)
+         (format "%02x" g)
+         (format "%02x" b))))
+
+(defn render-account-txn-logs!
+  "Writes out an HTML table showing all the different txn-log ops for a given
+  account, so we can understand where and how they diverged."
+  [{:keys [test account txn-log history]}]
+  (let [nodes   (:nodes test)
+        ; The txn IDs from the longest txn log:
+        log     (->> txn-log :txns (mapv :id))]
+    (->> (h/html
+           [:html
+            [:head
+             [:style txn-logs-stylesheet]]
+            [:body
+             [:h1 (str "Account " account " transaction logs")]
+             [:table
+              [:thead
+               [:tr
+                [:th "Time (s)"]
+                [:th "Node"]
+                [:th {:colspan 32} "Txns"]]]
+              [:tbody
+               (for [{:keys [time process f type value]} history
+                     :when (and (= f :txn-log)
+                                (= type :ok)
+                                (= account (:account value)))]
+                 [:tr
+                  (concat [[:td (format "%.2f" (nanos->secs time))]
+                           [:td (nth nodes (mod process (count nodes)))]]
+                          (->> (:txns value)
+                               (map-indexed vector)
+                               (keep (fn [[i txn]]
+                                       (when-let [id (txn-id txn)]
+                                         ; Is this compatible with the longest
+                                         ; log?
+                                         (let [compat? (= id (nth log i))
+                                               style (cond-> {}
+                                                       (not compat?)
+                                                       (assoc :background
+                                                              (rand-bg-color id))
+                                                       true
+                                                       timeline/style)]
+                                           [:td {:style style} id]))))))])]]]])
+         (spit (store/path! test "accounts" (str account "-txn-logs.html"))))))
+
 (defn render-account!
   "Writes out an account's HTML files."
   [test analysis account]
@@ -231,4 +302,5 @@
                         :balance-index balance-index)]
     (render-account-balances! analysis)
     (render-account-txn-log!  analysis)
-    (render-account-timeline! analysis)))
+    (render-account-timeline! analysis)
+    (render-account-txn-logs! analysis)))
