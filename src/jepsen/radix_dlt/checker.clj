@@ -14,7 +14,6 @@
                               [util :as u]]
             [jepsen.radix-dlt.checker.util :refer [analysis
                                                    balance->txn-id-prefix
-                                                   init-balance
                                                    rewrite-info-txns
                                                    txn-id
                                                    txn-op-accounts]]
@@ -305,6 +304,7 @@
     (reify checker/Checker
       (check [this test history {:keys [analysis] :as opts}]
         (let [la-history (list-append-history analysis)
+              ;_          (pprint la-history)
               res        (realtime+node-check elle test la-history opts)
               ; As an extra piece of debugging info, we're going to record
               ; how many reads went recognized/unrecognized.

@@ -162,8 +162,16 @@
                            (rc/->clj (rc/->account-address key-pair)))
                      (try+
                        (rc/drain! conn test key-pair to)
-                       ; Avoid being throttled during this phase
-                       (Thread/sleep 1000))))))))
+                       (catch [:type :jepsen.radix-dlt.client/txn-pending] e
+                         (info "Drain of" id
+                               (rc/->clj (rc/->account-address key-pair))
+                               "pending; moving on."))
+                       (catch Throwable e
+                         (warn e "Drain of" id
+                               (rc/->clj (rc/->account-address key-pair))
+                               "failed; moving on.")))
+                     ; Avoid being throttled during this phase
+                     (Thread/sleep 1000)))))))
 
   (close! [this test])
 
@@ -524,6 +532,18 @@
   [gen]
   (CheckTxnGenerator. gen clojure.lang.PersistentQueue/EMPTY))
 
+(defn stokenet-generator
+  "For stokenet, we re-use account 1 from test to test, which means that
+  account 1's transaction logs accumulate from run to run. We filter out
+  txn-log ops on account 1 for stokenet tests, if (:stokenet opts) is true."
+  [opts gen]
+  (if (:stokenet opts)
+    (gen/filter (fn [{:keys [f value]}]
+                  (not (and (= :txn-log f)
+                            (= 1 (:account value)))))
+                gen)
+    gen))
+
 (defn workload
   "Constructs a package of a client and generator."
   [opts]
@@ -539,6 +559,7 @@
                                     :accounts  accounts
                                     :token-rri token-rri)
                              generator!
+                             (stokenet-generator opts)
                              check-txn-generator))
      :final-generator [(when (get (:fs opts) :raw-txn-log) {:f :raw-txn-log})
                        (when (get (:fs opts) :txn-log)
@@ -547,4 +568,8 @@
                                 :accounts
                                 (map :id)
                                 (map (fn [acct]
-                                       {:f :txn-log, :value {:account acct}})))))]}))
+                                       {:f :txn-log, :value {:account acct}}))
+                                (stokenet-generator opts)
+                                ; We have to avoid overloading stokenet
+                                (gen/delay (if (:stokenet opts) 1 0))
+                                )))]}))

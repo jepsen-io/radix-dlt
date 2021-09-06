@@ -34,7 +34,8 @@
                                :refer [Account
                                        Balance]]]
             [knossos [history :as history]
-                     [op :as op]]))
+                     [op :as op]]
+            [slingshot.slingshot :refer [try+ throw+]]))
 
 (t/defalias ActionType
   "These are the types of actions we might see in a transaction log."
@@ -167,16 +168,6 @@
 (t/ann ^:no-check knossos.op/invoke?
        [Op -> boolean :filters {:then (is Invoke 0) :else (! Invoke 0)}])
 
-(t/ann init-balance [Account -> Balance])
-(defn init-balance
-  "How much XRD do accounts start with?"
-  [account]
-  (if (u/default-account-id? account)
-    ; I think this changed from beta.35.1 to beta.40?
-    ; 1000000000000000000000000000000000000000000000N
-    1000000000000000000000000000N
-    0N))
-
 (t/ann txn-id [TxnLogTxn -> (t/Option TxId)])
 (defn txn-id
   "Takes a txn from a txn-log operation and returns the ID encoded in its
@@ -275,6 +266,26 @@
 
 (t/tc-ignore
 
+(defn init-balance
+  "Infers an initial balance for a given account, given a history."
+  [account history]
+  (if (u/default-account-id? account)
+    ; For default account IDs, we should have performed an initial read at the
+    ; start of the test.
+    (or (->> history
+             (take-while (comp #{:balance} :f))
+             (keep (fn [{:keys [type value]}]
+                     (when (and (= type :ok)
+                                (= (:account value) account))
+                       (:balance value))))
+             first)
+        ; Wasn't read?
+        (throw+ {:type    :no-initial-balance-read
+                 :account account}))
+
+    ; Non-default account IDs: we assume they start at 0
+    0N))
+
 (defn txn-op-txn->txn-log-txn
   "Converts a :txn op representation of a transaction to the txn-log
   representation. This is kind of a broken version of this--we're guessing
@@ -344,15 +355,15 @@
     (assoc txn-log :txns txns')))
 
 (defn add-balances-to-txn-log
-  "Takes a transaction log on an account, and rewrites it to add a :balance and
-  balance' field to each transaction: the XRD balance before and after that
-  transaction was applied."
-  [txn-log]
+  "Takes a transaction log on an account, and an initial balance, and rewrites
+  it to add a :balance and balance' field to each transaction: the XRD balance
+  before and after that transaction was applied."
+  [txn-log init-balance]
   (let [account (:account txn-log)
         txns' (reduce (fn [journal txn]
                         (let [balance (if-let [prev (peek journal)]
                                         (:balance' prev)
-                                        (init-balance account))
+                                        init-balance)
                               balance' (apply-txn account balance txn)
                               txn' (assoc txn
                                           :balance  balance
@@ -401,7 +412,8 @@
        (map-vals (fn [txn-log]
                    (-> txn-log
                        add-txn-ids-to-txn-log
-                       add-balances-to-txn-log
+                       (add-balances-to-txn-log
+                         (init-balance (:account txn-log) history))
                        add-id-index-to-txn-log
                        add-balance'-index-to-txn-log)))))
 
@@ -480,14 +492,14 @@
   history which can't be explained by the transaction log, plus unlogged txns
   (if any)."
   [account-analysis]
-  (let [{:keys [account history txn-log pair-index logged-txn-ids]}
+  (let [{:keys [account history txn-log pair-index logged-txn-ids init-balance]}
         account-analysis]
     ; (info :checking-account account)
     (loop [history            (->> history
                                    (filter (comp integer? :process))
                                    seq)
            ; A set of balances we think are possible at this point in time
-           balances           #{(init-balance account)}
+           balances           #{init-balance}
            ; A collection of offsets (from unlogged transactions) that could be
            ; added to the balance.
            unlogged-deltas   #{0}
@@ -622,7 +634,7 @@
   think occurred for that account."
   [account-analysis]
   (into (sorted-set)
-        (concat [(init-balance (:account account-analysis))]
+        (concat [(:init-balance account-analysis)]
                 (balance-balances account-analysis)
                 (txn-log-balances account-analysis))))
 
@@ -638,8 +650,9 @@
     ;(info :txn-logs (pprint-str txn-logs))
     (->> (all-accounts history)
          (pmap (fn [account]
-                 (let [history    (account-history account history)
-                       pair-index (history/pair-index+ history)
+                 (let [history      (account-history account history)
+                       init-balance (init-balance account history)
+                       pair-index   (history/pair-index+ history)
                        txn-log (get txn-logs account)
                        txn-ids (->> history
                                     (filter (comp #{:txn} :f))
@@ -653,6 +666,7 @@
                        account-analysis {:account          account
                                          :history          history
                                          :pair-index       pair-index
+                                         :init-balance     init-balance
                                          :txn-log          txn-log
                                          :txn-ids          txn-ids
                                          :logged-txn-ids   logged-txn-ids
@@ -686,6 +700,7 @@
                   account. Includes :sub-index fields on ops: their index
                   within the subhistory.
      :pair-index  A pair index for the account history.
+     :init-balance  The balance we think this account started with.
      :txn-log     The longest augmented transaction log for this account.
      :txn-ids     All transactions IDs (except failed ones) which could have
                   possibly interacted with this account.
@@ -711,9 +726,10 @@
   :unresolvable   if that balance is unresolvable
   :ambiguous      if that balance is resolvable to multiple points in the log"
   [analysis account balance]
-  (let [txn-log (get-in analysis [:accounts account :txn-log])]
-    (cond (nil? balance)                      nil
-          (= balance (init-balance account))  nil
+  (let [txn-log       (get-in analysis [:accounts account :txn-log])
+        init-balance  (get-in analysis [:accounts account :init-balance])]
+    (cond (nil? balance)            nil
+          (= balance init-balance)  nil
           :else (let [txns (get-in txn-log [:by-balance' balance])]
                   (case (count txns)
                     0 :unresolvable
