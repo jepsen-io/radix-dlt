@@ -320,6 +320,11 @@
                 [:th {:colspan 32} "Txns"]]]
               [:tbody
                (->> history
+                    ; We're likely going to have a ton of duplicated txn log
+                    ; ops before the key comes into play--we drop these to
+                    ; clean up the visualization.
+                    (drop-while (fn [{:keys [f value]}]
+                                  (not (= account (:account value)))))
                     (keep (partial txn-log-row account txn-ids nodes log))
                     doall)]]]])
          (spit (store/path! test "accounts" (str account "-txn-logs.html"))))))
