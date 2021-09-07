@@ -206,7 +206,11 @@
   "Writes out an HTML file that represents all ops involving that
   account."
   [{:keys [test account history]}]
-  (let [pairs         (history/pairs+ history)
+  (let [; This is expensive to render, so we leave em out
+        history       (->> history
+                           (remove (comp #{:raw-balances :raw-txn-log} :f))
+                           vec)
+        pairs         (history/pairs+ history)
         pair-count    (count pairs)
         process-index (timeline/process-index history)]
   (->> (h/html
