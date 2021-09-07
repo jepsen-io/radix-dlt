@@ -270,19 +270,10 @@
                             ; bounds check)
                             (let [compat? (and (< i (count log))
                                                (= id (nth log i)))
-                                  _ (when (= 18 account)
-                                      (let [l (try (nth log i)
-                                                   (catch IndexOutOfBoundsException e :oob))]
-                                        (info :i   i
-                                              :id  id
-                                              :log l)))
-                                  style (cond-> {}
-                                          (not compat?)
-                                          (assoc :background
-                                                 (rand-bg-color id))
-                                          true
-                                          timeline/style)]
-                              [:td {:style style} id])))
+                                  style (when-not compat?
+                                          (str "background: "
+                                               (rand-bg-color id)))]
+                              [:td (when style {:style style}) id])))
                         vec))]
     (when (= :ok type)
       (case f
@@ -309,10 +300,7 @@
   [{:keys [test account txn-ids txn-log history]}]
   (let [nodes   (:nodes test)
         ; The txn IDs from the longest txn log:
-        log     (->> txn-log :txns (mapv :id))]
-    (info :txn-ids txn-ids)
-    (when (= 18 account)
-      (info :log log))
+        log     (->> txn-log :txns (keep :id) vec)]
     (->> (h/html
            [:html
             [:head
