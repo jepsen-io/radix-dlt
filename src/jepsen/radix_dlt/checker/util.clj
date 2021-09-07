@@ -454,7 +454,8 @@
     ; balances.
     (map-vals (fn [txn-log]
                 (-> txn-log
-                    add-balances-to-txn-log
+                    (add-balances-to-txn-log
+                      (init-balance (:account txn-log) history))
                     add-id-index-to-txn-log
                     add-balance'-index-to-txn-log))
               logs)))

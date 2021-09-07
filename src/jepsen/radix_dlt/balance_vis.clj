@@ -248,13 +248,71 @@
          (format "%02x" g)
          (format "%02x" b))))
 
+(defn txn-log-row
+  "Given an account, a set of txn ids that could be involved with this account,
+  a set of nodes, and the longest log of txn IDs, turns an operation into a
+  single Hiccup [:tr ...] row for render-account-txn-logs!, or nil if this
+  operation isn't relevant."
+  [account txn-ids nodes log {:keys [time process f type value]}]
+  (assert (set? txn-ids))
+  (let [preamble [[:td (format "%.2f" (nanos->secs time))]
+                  [:td (nth nodes (mod process (count nodes)))]
+                  [:td (name f)]]
+        ; Takes a seq of txn ids, and yields a seq of [:td ...]s
+        ids->tds (fn ids->tds [ids]
+                   (->> ids
+                        (map-indexed vector)
+                        (keep
+                          (fn id->td [[i id]]
+                            ; Is this compatible with the longest log? (If we
+                            ; inferred the longest log from raw-txn-log, we
+                            ; might actually have fewer txns, so also do a
+                            ; bounds check)
+                            (let [compat? (and (< i (count log))
+                                               (= id (nth log i)))
+                                  _ (when (= 18 account)
+                                      (let [l (try (nth log i)
+                                                   (catch IndexOutOfBoundsException e :oob))]
+                                        (info :i   i
+                                              :id  id
+                                              :log l)))
+                                  style (cond-> {}
+                                          (not compat?)
+                                          (assoc :background
+                                                 (rand-bg-color id))
+                                          true
+                                          timeline/style)]
+                              [:td {:style style} id])))
+                        vec))]
+    (when (= :ok type)
+      (case f
+        :txn-log
+        (when (= account (:account value))
+          [:tr (->> (:txns value)
+                    (keep txn-id)
+                    ids->tds
+                    (concat preamble))])
+
+        :raw-txn-log
+        ; We have a value which is a raw txn log, and we need to project it to
+        ; just those txns involving this key before we emit tds.
+        [:tr (->> value
+                  (filter txn-ids)
+                  ids->tds
+                  (concat preamble))]
+
+        nil))))
+
 (defn render-account-txn-logs!
   "Writes out an HTML table showing all the different txn-log ops for a given
   account, so we can understand where and how they diverged."
-  [{:keys [test account txn-log history]}]
+  [{:keys [test account txn-ids txn-log history]}]
   (let [nodes   (:nodes test)
         ; The txn IDs from the longest txn log:
         log     (->> txn-log :txns (mapv :id))]
+    (info :txn-ids txn-ids)
+    (when (= 18 account)
+      (info :log log))
     (->> (h/html
            [:html
             [:head
@@ -266,29 +324,12 @@
                [:tr
                 [:th "Time (s)"]
                 [:th "Node"]
+                [:th "Fn"]
                 [:th {:colspan 32} "Txns"]]]
               [:tbody
-               (for [{:keys [time process f type value]} history
-                     :when (and (= f :txn-log)
-                                (= type :ok)
-                                (= account (:account value)))]
-                 [:tr
-                  (concat [[:td (format "%.2f" (nanos->secs time))]
-                           [:td (nth nodes (mod process (count nodes)))]]
-                          (->> (:txns value)
-                               (map-indexed vector)
-                               (keep (fn [[i txn]]
-                                       (when-let [id (txn-id txn)]
-                                         ; Is this compatible with the longest
-                                         ; log?
-                                         (let [compat? (= id (nth log i))
-                                               style (cond-> {}
-                                                       (not compat?)
-                                                       (assoc :background
-                                                              (rand-bg-color id))
-                                                       true
-                                                       timeline/style)]
-                                           [:td {:style style} id]))))))])]]]])
+               (->> history
+                    (keep (partial txn-log-row account txn-ids nodes log))
+                    doall)]]]])
          (spit (store/path! test "accounts" (str account "-txn-logs.html"))))))
 
 (defn render-account!
