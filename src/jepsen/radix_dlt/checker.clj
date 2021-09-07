@@ -39,103 +39,110 @@
   :balance operations are (and this is such a hack) also mapped to reads of
   lists of txn ids: we play forward what we *think* the sequence of txns was,
   and use that to construct a mapping of balances to sequences of txns."
-  [{:keys [accounts history pair-index] :as analysis}]
+  [{:keys [accounts history txn-index pair-index] :as analysis}]
   ;(info :account->balance->txn-ids
   ;      (pprint-str account->balance->txn-ids))
-  (mapv (fn xform-op [{:keys [type f value] :as op}]
-          (case f
-            :txn
-            (let [id  (:id value)
-                  ; Generate synthetic transaction writing to all involved
-                  ; accounts
-                  txn (->> (txn-op-accounts op)
-                           (mapv (fn [acct] [:append acct id])))]
-              (assoc op :value txn))
+  (let [; Turns a transaction ID into a collection of accounts involved in that
+        ; txn.
+        txn-id->accts (map-vals txn-op-accounts txn-index)
+        ; The base structure for every raw-txn-log read: a map of every account
+        ; id to an empty vector.
+        raw-txn-log-base (zipmap (keys accounts) (repeat []))]
+    (mapv (fn xform-op [{:keys [type f value] :as op}]
+            (case f
+              :txn
+              (let [id  (:id value)
+                    ; Generate synthetic transaction writing to all involved
+                    ; accounts
+                    txn (->> (txn-op-accounts op)
+                             (mapv (fn [acct] [:append acct id])))]
+                (assoc op :value txn))
 
-            ; For raw txn logs, we rewrite them to a single transaction reading
-            ; every extant key, by projecting the log to just those txns which
-            ; involved that key. This isn't really a *true* read of keys, but
-            ; it still gives us txn ordering information, and that's critical
-            ; to the rest of our balance inference process.
-            :raw-txn-log
-            (->> (keys accounts)
-                 (map (fn raw-txn-log->txn [acct]
-                        (let [txn-ids (-> accounts (get acct) :txn-ids)
-                              ; Filter the log to only involved txn IDs
-                              sublog  (->> value
-                                           (filter txn-ids)
-                                           vec)]
-                          [:r acct sublog])))
-                 (assoc op :value))
+              ; For raw txn logs, we rewrite them to a single transaction
+              ; reading every extant key, by projecting the log to just those
+              ; txns which involved that key.
+              :raw-txn-log
+              (->> value
+                   ; Project each observed txn-id into its corresponding account
+                   (reduce (fn raw-txn-log-reduce [m txn-id]
+                             (reduce (fn raw-txn-log-reduce-inner [m account]
+                                       (update m account conj txn-id))
+                                     m
+                                     (txn-id->accts txn-id)))
+                           raw-txn-log-base)
+                  ; Then convert that map to a vector of reads of each acct
+                  (mapv (fn raw-txn-log-read-mop [[account txn-ids]]
+                          [:r account txn-ids]))
+                  (assoc op :value))
 
-            :txn-log
-            (let [k   (:account value)
-                  ; Find all txids
-                  ids (when (= type :ok)
-                        (->> (:txns value)
-                             (keep txn-id)
-                             vec))]
-              (assoc op :value [[:r k ids]]))
+              :txn-log
+              (let [k   (:account value)
+                    ; Find all txids
+                    ids (when (= type :ok)
+                          (->> (:txns value)
+                               (keep txn-id)
+                               vec))]
+                (assoc op :value [[:r k ids]]))
 
-            :balance
-            (if (not= type :ok)
-              ; For invocations, infos, fails, we just turn this into a nil
-              ; read.
-              (assoc op :value [[:r (:account value) nil]])
+              :balance
+              (if (not= type :ok)
+                ; For invocations, infos, fails, we just turn this into a nil
+                ; read.
+                (assoc op :value [[:r (:account value) nil]])
 
-              ; For ok balances, try to resolve what string of txns they saw
-              (let [{:keys [account balance]} value
-                    ids (balance->txn-id-prefix analysis account balance)]
-                (case ids
-                  :unresolvable
-                  (assoc op
-                         :type    :info
-                         :error   :unresolvable-balance
-                         :balance (:balance value)
-                         :value   [[:r account nil]])
+                ; For ok balances, try to resolve what string of txns they saw
+                (let [{:keys [account balance]} value
+                      ids (balance->txn-id-prefix analysis account balance)]
+                  (case ids
+                    :unresolvable
+                    (assoc op
+                           :type    :info
+                           :error   :unresolvable-balance
+                           :balance (:balance value)
+                           :value   [[:r account nil]])
 
-                  :ambiguous
-                  (assoc op
-                         :type    :info
-                         :error   :ambiguous-balance
-                         :balance (:balance value)
-                         :value   [[:r account nil]])
+                    :ambiguous
+                    (assoc op
+                           :type    :info
+                           :error   :ambiguous-balance
+                           :balance (:balance value)
+                           :value   [[:r account nil]])
 
-                  (assoc op :type :ok, :value [[:r account ids]]))))
+                    (assoc op :type :ok, :value [[:r account ids]]))))
 
-            ; Raw balance reads are translated to a read of every account
-            ; *ever*.
-            :raw-balances
-            (let [; We need to look forward to figure out which accounts we can
-                  ; even appear to *try* to read.
-                  complete (if (= :invoke type)
-                             (get pair-index op)
-                             op)
-                  ; What *will* we read later?
-                  value'   (:value complete)
-                  ; In general, Radix is so flaky about losing transactions
-                  ; from the log that pretty much every balances read is going
-                  ; to have some balances we can't explain. To allow the
-                  ; checker to tell us at least *some* things, we project
-                  ; a raw-balances read to just those accounts which were
-                  ; uniquely resolvable, and construct a transaction which
-                  ; reads those. Unresolvable and ambiguous balances we just
-                  ; skip over.
-                  txn (->> (keys accounts)
-                           (keep (fn raw-balances->txn [acct]
-                                   (let [balance (get value' acct)
-                                         ids     (balance->txn-id-prefix
-                                                   analysis acct balance)]
-                                     (case ids
-                                       :unresolvable nil
-                                       :ambiguous    nil
-                                       [:r acct (if (= :invoke type)
-                                                  nil
-                                                  ids)]))))
-                           vec)]
-              (assoc op :value txn))
-            ))
-        (filter (comp integer? :process) history)))
+              ; Raw balance reads are translated to a read of every account
+              ; *ever*.
+              :raw-balances
+              (let [; We need to look forward to figure out which accounts we
+                    ; can even appear to *try* to read.
+                    complete (if (= :invoke type)
+                               (get pair-index op)
+                               op)
+                    ; What *will* we read later?
+                    value'   (:value complete)
+                    ; In general, Radix is so flaky about losing transactions
+                    ; from the log that pretty much every balances read is
+                    ; going to have some balances we can't explain. To allow
+                    ; the checker to tell us at least *some* things, we project
+                    ; a raw-balances read to just those accounts which were
+                    ; uniquely resolvable, and construct a transaction which
+                    ; reads those. Unresolvable and ambiguous balances we just
+                    ; skip over.
+                    txn (->> (keys accounts)
+                             (keep (fn raw-balances->txn [acct]
+                                     (let [balance (get value' acct)
+                                           ids     (balance->txn-id-prefix
+                                                     analysis acct balance)]
+                                       (case ids
+                                         :unresolvable nil
+                                         :ambiguous    nil
+                                         [:r acct (if (= :invoke type)
+                                                    nil
+                                                    ids)]))))
+                             vec)]
+                (assoc op :value txn))
+              ))
+          (filter (comp integer? :process) history))))
 
 (defn write?
   "Is this a write operation?"

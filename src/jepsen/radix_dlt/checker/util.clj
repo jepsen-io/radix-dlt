@@ -659,7 +659,7 @@
                                     (filter (comp #{:txn} :f))
                                     (filter (comp #{:ok :info} :type))
                                     (map (comp :id :value))
-                                    (into (sorted-set)))
+                                    set)
                        logged-txn-ids   (->> txn-log :by-id keys
                                              (into (sorted-set)))
                        unlogged-txn-ids (set/difference txn-ids logged-txn-ids)
