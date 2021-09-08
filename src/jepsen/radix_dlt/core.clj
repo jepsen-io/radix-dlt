@@ -143,7 +143,7 @@
 
 (def cli-opts
   "Command line option specifications."
-  [[nil "--check-only-raw-txn-log-compatible-orders" "If set, skips the expensive cycle detection inference and per-key projections of raw-txn-log operations, and simply checks that there are no incompatible orders in the raw txn log; e.g. two log versions neither of which is a prefix of the other."]
+  [[nil "--check-only-raw-txn-log" "If set, skips the expensive cycle detection inference and per-key projections of raw-txn-log operations, and simply checks the raw txn log as if it were a single key."]
 
    [nil "--db-targets TARGETS" "A comma-separated list of nodes to pause/kill/etc; e.g. one,all"
     :default [:minority-third :majority :all]

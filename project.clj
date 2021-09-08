@@ -23,11 +23,11 @@
                   ; which includes the fixes for that issue, but with the 1.0.1
                   ; definition of TokenInfo.java, so we can deserialize the
                   ; older JSON requests.
-                  ;"1.0.0-feature~fix-user-token-balance-1.0.1-compat-SNAPSHOT"
+                  "1.0.0-feature~fix-user-token-balance-1.0.1-compat-SNAPSHOT"
 
                   ; For testing the fix-user-token-balance branch circa August
                   ; 25, 2021
-                  "1.0.0-feature~fix-user-token-balance-SNAPSHOT"
+                  ;"1.0.0-feature~fix-user-token-balance-SNAPSHOT"
 
                   ; For builds prior to ~Aug 25, 2021
                   ;"1.0-beta.40-release~1.0-beta.40-SNAPSHOT"

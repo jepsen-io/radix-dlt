@@ -333,7 +333,7 @@
 (defn raw-txn-history
   "Takes an analysis and rewrites its :txn and :raw-txn-log operations to look
   like transactions operating on a single global list."
-  [{:keys [history] :as analysis}]
+  [history]
   (->> history
        (filter (comp #{:txn :raw-txn-log} :f))
        (mapv (fn [{:keys [type f value] :as op}]
@@ -353,8 +353,8 @@
   list, and every txn as an append to it."
   []
   (reify checker/Checker
-    (check [this test history {:keys [analysis] :as opts}]
-      (let [history (raw-txn-history analysis)
+    (check [this test history opts]
+      (let [history (raw-txn-history history)
             ;_       (pprint history)
             elle    (append/checker
                       {:consistency-models [:strict-serializable]})
@@ -564,10 +564,13 @@
                       ; analysis is super expensive over raw txn logs, and
                       ; we're looking for rare anomalies so we need to be
                       ; able to test longer histories here.
-                      (:check-only-raw-txn-log-compatible-orders test)
+                      (:check-only-raw-txn-log test)
                       (assoc base-checkers
-                             :raw-txn-log-compatible-orders
-                             (raw-txn-log-compatible-orders))
+                             :raw-txn (raw-txn-checker)
+                             ; Redundant with raw-txn-checker
+                             ;:raw-txn-log-compatible-orders
+                             ;(raw-txn-log-compatible-orders)
+                             )
 
                       ; The full suite
                       (assoc base-checkers
@@ -584,9 +587,9 @@
             ; going to hit a *ton* of timeouts, and basically everything
             ; benefits from reducing those.
             history  (rewrite-info-txns history)]
-        (if (:check-only-raw-txn-log-compatible-orders test)
-          ; We're trying to do this as quick as possible; don't even both with
-          ; analysis phase.
+        (if (:check-only-raw-txn-log test)
+          ; We're trying to do this as quick as possible; don't even bother
+          ; with analysis phase.
           (checker/check checker test history opts)
 
           ; When we're doing the full analysis, we want to compute the
