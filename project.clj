@@ -13,6 +13,10 @@
                   :exclusions [commons-codec]]
 
                  [com.radixdlt/radixdlt-java
+                  ; For testing the fix-user-token-balance branch circa August
+                  ; 25, 2021
+                  "1.0.0-feature~fix-user-token-balance-SNAPSHOT"
+
                   ; For testing Stokenet circa Sept 2, 2021 (which can't talk
                   ; to new clients because the definition of tokeninfo JSON
                   ; responses changed and the client isn't backwards
@@ -23,11 +27,7 @@
                   ; which includes the fixes for that issue, but with the 1.0.1
                   ; definition of TokenInfo.java, so we can deserialize the
                   ; older JSON requests.
-                  "1.0.0-feature~fix-user-token-balance-1.0.1-compat-SNAPSHOT"
-
-                  ; For testing the fix-user-token-balance branch circa August
-                  ; 25, 2021
-                  ;"1.0.0-feature~fix-user-token-balance-SNAPSHOT"
+                  ;"1.0.0-feature~fix-user-token-balance-1.0.1-compat-SNAPSHOT"
 
                   ; For builds prior to ~Aug 25, 2021
                   ;"1.0-beta.40-release~1.0-beta.40-SNAPSHOT"

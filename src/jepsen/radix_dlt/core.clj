@@ -191,9 +191,19 @@
     :parse-fn read-string
     :validate [#(and (number? %) (pos? %)) "must be a positive number"]]
 
+   [nil "--read-concurrency NUMBER" "How many threads should perform reads? 2n means 'twice the number of nodes'"
+    :default  "2n"
+    :validate [(partial re-find #"^\d+n?$")
+               "Must be an integer, optionally followed by n."]]
+
    ["-w" "--workload NAME" "Which workload should we run?"
     :parse-fn keyword
     :validate [workloads (cli/one-of workloads)]]
+
+   [nil "--write-concurrency NUMBER" "How many threads should perform writes? 2n means 'twice the number of nodes'"
+    :default  "2n"
+    :validate [(partial re-find #"^\d+n?$")
+               "Must be an integer, optionally followed by n."]]
 
    [nil "--zip ZIPFILE" "Path to a local radixdlt-dist-<whatever>.zip file to install, rather than using --version. Helpful if you want to test a feature branch or one-off build."]
    ])
@@ -226,13 +236,28 @@
                                        (.of (AccountAddressing/bech32 "tdx")))}
                  pprint)))}})
 
+(defn test-opt-fn
+  "Pre-processes options before passing them to the test runner."
+  [parsed]
+  (let [; Start by parsing the write/read concurrencies
+        parsed (-> parsed
+                   (cli/parse-concurrency :read-concurrency)
+                   (cli/parse-concurrency :write-concurrency))
+        ; Use that to compute our actual :concurrency
+        {:keys [read-concurrency write-concurrency]} (:options parsed)
+        parsed (update parsed :options
+                       assoc :concurrency (+ read-concurrency write-concurrency))]
+    parsed))
+
 (defn -main
   "CLI entry point."
   [& args]
   (cli/run! (merge (cli/single-test-cmd {:test-fn   radix-test
-                                         :opt-spec  cli-opts})
+                                         :opt-spec  cli-opts
+                                         :opt-fn    test-opt-fn})
                    (cli/test-all-cmd {:tests-fn     all-tests
-                                      :opt-spec     cli-opts})
+                                      :opt-spec     cli-opts
+                                      :opt-fn       test-opt-fn})
                    (cli/serve-cmd)
                    (keygen-cmd))
             args))

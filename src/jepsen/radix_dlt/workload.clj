@@ -136,7 +136,7 @@
                            ; Translate Radix txn ids back to Jepsen's smaller
                            ; txn IDs.
                            (keep @radix-txn-id->txn-id)
-                           )]
+                           vec)]
           (assoc op :type :ok, :value txn-ids))
 
         :balance
@@ -364,17 +364,15 @@
 
         ; Right, what thread is this?
         (let [t (->> op :process (gen/process->thread context))
-              ; How far into the concurrency of the test is that?
-              zone (/ t (count (:workers context)))
-              ; Pick a f based on the zone: first quarter do txns, others are
-              ; reads. We do this to avoid blocking readers on txns when txns
-              ; are super slow.
-              f (if (< zone 1/4)
-                  :txn
-                  (->> [:balance :txn-log :raw-balances :raw-txn-log]
-                       (filter fs)
-                       vec
-                       rand-nth))
+              ; Pick an f based on the write/read concurrency of the test.
+              f (if (< t (:write-concurrency test))
+                    ; First few threads do writes
+                    :txn
+                    ; Remaining threads do reads
+                    (->> [:balance :txn-log :raw-balances :raw-txn-log]
+                         (filter fs)
+                         vec
+                         rand-nth))
               op (assoc op :f f)]
           (case f
             :txn (let [[transfer gen'] (gen-transfer! test this)]
