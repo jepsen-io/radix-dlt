@@ -372,13 +372,14 @@
     (check [this test history {:keys [analysis] :as opts}]
       ;(info :accounts
       ;      (pprint-str (:accounts analysis)))
-      (let [inexplicable-balances (->> (:accounts analysis)
-                                       vals
-                                       (mapcat :inexplicable-balances)
-                                       (sort-by :index))]
+      (let [errors (->> (:accounts analysis)
+                        vals
+                        (mapcat :inexplicable-balances)
+                        (sort-by (comp count :expected)))]
         (if (seq inexplicable-balances)
           {:valid? false
-           :inexplicable-balances inexplicable-balances}
+           :error-count (count errors)
+           :errors      (sample 6 errors)}
           {:valid? true})))))
 
 (defn negative-checker
