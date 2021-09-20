@@ -562,11 +562,10 @@
      (let [c (->clj (chunk (OptionalLong/empty)))]
        (concat (results c)
                (paginated chunk results (:cursor c))))))
-  ([chunk results ^NavigationCursor cursor]
-   ; Without a cursor, we're at the end of the sequence
-   (when (and cursor
-              ; It looks like they signal the end with an empty string value?
-              (not= "" (.value cursor)))
+  ([chunk results cursor]
+   ; Without a cursor, we're at the end of the sequence. Right? Right? Argh why
+   ; are there two different ways of paginating :-O
+   (when cursor
      (lazy-seq
        (let [c (-> cursor OptionalLong/of chunk ->clj)]
          (concat (results c)
@@ -574,7 +573,7 @@
 
 (def history-chunk-size
   "What's the `size` parameter we pass to each transaction history request?"
-  128)
+  32)
 
 (defn txn-history
   "Takes an account address, a size (perhaps a number of transactions?).
