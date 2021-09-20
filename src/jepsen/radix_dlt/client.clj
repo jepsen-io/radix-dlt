@@ -44,7 +44,8 @@
            (com.radixdlt.utils.functional Failure
                                           Result)
            (java.util Base64
-                      Optional)
+                      Optional
+                      OptionalLong)
            (java.util.function Function)
            (org.bouncycastle.util.encoders Hex)))
 
@@ -152,6 +153,11 @@
   Optional
   (->clj [x] (->clj (.orElse x nil)))
 
+  OptionalLong
+  (->clj [x]
+    (when (.isPresent x)
+      (.getAsLong x)))
+
   Result
   (->clj [x] (->clj (unres x)))
 
@@ -165,7 +171,12 @@
 
   TransactionHistory
   (->clj [x]
-    {:cursor (.orElse (.getCursor x) nil)
+    ; They renamed this from getCursor to getNextOffset, which is sort of
+    ; annoying because some other APIs still use `cursor`. We rename this to
+    ; `cursor` here so we can use the same logic for paginating through both
+    ; types of collections without having to parameterize the cursor field
+    ; name.
+    {:cursor (->clj (.getNextOffset x))
      :txns   (map ->clj (.getTransactions x))})
 
   TransactionDTO
@@ -548,7 +559,7 @@
    ; sequence; later the absence of a cursor means the sequence is *ending*.
    (lazy-seq
      ; Fetch initial chunk
-     (let [c (->clj (chunk (Optional/empty)))]
+     (let [c (->clj (chunk (OptionalLong/empty)))]
        (concat (results c)
                (paginated chunk results (:cursor c))))))
   ([chunk results ^NavigationCursor cursor]
@@ -557,7 +568,7 @@
               ; It looks like they signal the end with an empty string value?
               (not= "" (.value cursor)))
      (lazy-seq
-       (let [c (-> cursor Optional/of chunk ->clj)]
+       (let [c (-> cursor OptionalLong/of chunk ->clj)]
          (concat (results c)
                  (paginated chunk results (:cursor c))))))))
 
@@ -687,6 +698,10 @@
              (assoc ~op :type :info, :error [:request-timed-out (:message e#)])
 
              (throw+ e#)))
+         ; Not sure why there are two codes for substate not found...
+         (catch [:type :radix-dlt/failure, :code -2014] e#
+           (assoc ~op :type :fail, :error [:substate-also-not-found
+                                           (:message e#)]))
          (catch [:type :radix-dlt/failure, :code 1500] e#
            (assoc ~op :type :fail, :error [:substate-not-found
                                            (:message e#)]))

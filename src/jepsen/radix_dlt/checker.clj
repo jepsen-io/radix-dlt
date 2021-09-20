@@ -62,18 +62,21 @@
               ; reading every extant key, by projecting the log to just those
               ; txns which involved that key.
               :raw-txn-log
-              (->> value
-                   ; Project each observed txn-id into its corresponding account
-                   (reduce (fn raw-txn-log-reduce [m txn-id]
-                             (reduce (fn raw-txn-log-reduce-inner [m account]
-                                       (update m account conj txn-id))
-                                     m
-                                     (txn-id->accts txn-id)))
-                           raw-txn-log-base)
-                  ; Then convert that map to a vector of reads of each acct
-                  (mapv (fn raw-txn-log-read-mop [[account txn-ids]]
-                          [:r account txn-ids]))
-                  (assoc op :value))
+              (if (= type :ok)
+                (->> value
+                     ; Project each observed txn-id into its corresponding
+                     ; account
+                     (reduce (fn raw-txn-log-reduce [m txn-id]
+                               (reduce (fn raw-txn-log-reduce-inner [m account]
+                                         (update m account conj txn-id))
+                                       m
+                                       (txn-id->accts txn-id)))
+                             raw-txn-log-base)
+                     ; Then convert that map to a vector of reads of each acct
+                     (mapv (fn raw-txn-log-read-mop [[account txn-ids]]
+                             [:r account txn-ids]))
+                     (assoc op :value))
+                op)
 
               :txn-log
               (let [k   (:account value)

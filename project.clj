@@ -13,9 +13,12 @@
                   :exclusions [commons-codec]]
 
                  [com.radixdlt/radixdlt-java
+                  ; For testing rc-1.0.2
+                  "1.0.0-rc~1.0.2-SNAPSHOT"
+
                   ; For testing the fix-user-token-balance branch circa August
                   ; 25, 2021
-                  "1.0.0-feature~fix-user-token-balance-SNAPSHOT"
+                  ;"1.0.0-feature~fix-user-token-balance-SNAPSHOT"
 
                   ; For testing Stokenet circa Sept 2, 2021 (which can't talk
                   ; to new clients because the definition of tokeninfo JSON

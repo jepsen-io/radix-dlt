@@ -135,9 +135,8 @@
                            (map :transaction_identifier)
                            ; Translate Radix txn ids back to Jepsen's smaller
                            ; txn IDs.
-                           (keep @radix-txn-id->txn-id)
-                           vec)]
-          (assoc op :type :ok, :value txn-ids))
+                           (keep @radix-txn-id->txn-id))]
+          (assoc op :type :ok, :value (when (seq txn-ids) (vec txn-ids))))
 
         :balance
         (let [b (->> (rc/token-balances conn (a/id->address @(:accounts test)
