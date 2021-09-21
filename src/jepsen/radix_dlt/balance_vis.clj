@@ -213,16 +213,17 @@
         pairs         (history/pairs+ history)
         pair-count    (count pairs)
         process-index (timeline/process-index history)]
-  (->> (h/html
-         [:html
-          [:head
-           [:style timeline/stylesheet]]
-          [:body
-           [:h1 (str "Account " account " transactions")]
-           [:div {:class "ops"}
-            (map (partial timeline/pair->div history test process-index)
-                 pairs)]]])
-       (spit (store/path! test "accounts" (str account "-timeline.html"))))))
+    ;(info :pair-count pair-count)
+    (->> (h/html
+           [:html
+            [:head
+             [:style timeline/stylesheet]]
+            [:body
+             [:h1 (str "Account " account " transactions")]
+             [:div {:class "ops"}
+              (map (partial timeline/pair->div history test process-index)
+                   pairs)]]])
+         (spit (store/path! test "accounts" (str account "-timeline.html"))))))
 
 (def txn-logs-stylesheet
   "CSS styles for the txn-logs visualization"

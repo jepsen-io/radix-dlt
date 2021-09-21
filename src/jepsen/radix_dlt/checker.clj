@@ -376,7 +376,7 @@
                         vals
                         (mapcat :inexplicable-balances)
                         (sort-by (comp count :expected)))]
-        (if (seq inexplicable-balances)
+        (if (seq errors)
           {:valid? false
            :error-count (count errors)
            :errors      (sample 6 errors)}
@@ -472,8 +472,9 @@
                         (when-let [id (:id txn)]
                           (txn-diff test (get txn-txns id) txn)))
                       (remove nil?))]
-        {:valid? (empty? errs)
-         :errors errs}))))
+        {:valid?        (empty? errs)
+         :error-count   (count errs)
+         :errors        (sample 6 errs)}))))
 
 (defn balance-vis-checker
   "Renders balances, transaction logs, etc for each account"
