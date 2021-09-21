@@ -476,7 +476,7 @@
        :key-dist           key-dist
        :key-dist-base      (:key-dist-base opts 2)
        :key-count          key-count
-       :max-writes-per-key (:max-writes-per-key opts 32)
+       :max-writes-per-key (:max-writes-per-key opts 64)
        :max-txn-size       (:max-txn-size opts 4)
        :key-pool           key-pool
        :write-counts       {}
