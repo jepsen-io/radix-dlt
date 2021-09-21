@@ -171,6 +171,9 @@
     :parse-fn read-string
     :validate validate-non-neg]
 
+   [nil "--[no-]self-transfers" "Enables transfers from an account to itself."
+    :default true]
+
    [nil "--stokenet" "If enabled, tests against the public Stokenet rather than a local installation."]
 
    [nil "--validators COUNT" "Number of validators."

@@ -276,7 +276,11 @@
                  (mapv (fn [_]
                          {:type   :transfer
                           :from   from
-                          :to     (gen-rand-key gen)
+                          :to     (if (:self-transfers? gen)
+                                    (gen-rand-key gen)
+                                    (->> (repeatedly #(gen-rand-key gen))
+                                         (remove #{from})
+                                         first))
                           :amount (if (u/default-account-id? from)
                                     ; If this is the first write, give them a
                                     ; bunch to play with; otherwise almost
@@ -312,6 +316,7 @@
    key-dist-base
    max-writes-per-key
    max-txn-size
+   self-transfers? ; Whether we generate transfers from accounts to themselves
    fs           ; Set of :fs we generate
    accounts     ; An atom to an accounts structure
    token-rri    ; A promise of an RRI for the token we'll transfer
@@ -478,6 +483,7 @@
        :key-count          key-count
        :max-writes-per-key (:max-writes-per-key opts 64)
        :max-txn-size       (:max-txn-size opts 4)
+       :self-transfers?    (:self-transfers opts true)
        :key-pool           key-pool
        :write-counts       {}
        :funded?            {}
