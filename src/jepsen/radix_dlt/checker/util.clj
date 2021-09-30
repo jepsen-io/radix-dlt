@@ -316,9 +316,10 @@
           {}
           history))
 
-(defn txn-account-delta
+(defn txn-account-delta-by-actions
   "Takes an account ID and a transaction, and returns the net effect of this
-  transaction on that account's XRD."
+  transaction on that account's XRD, derived from the :fee and :actions
+  fields."
   [account txn]
   (assert (:fee txn) (str "Txn " (pr-str txn) " has no fee!"))
   ; If we're the originator of this transaction, then we paid the fee
@@ -335,6 +336,19 @@
                   (= account to)    (+ amount)))) ; Credit
             delta
             (:actions txn))))
+
+(defn txn-account-delta
+  "Takes an account ID and a transaction, and returns the net effect of this
+  transaction on that account's XRD, derived from the accounting :entries."
+  [account txn]
+  (-> (keep (fn [{:keys [rri delta owner]}]
+              (when (and (xrd? rri) (= account owner))
+                delta))
+            (:entries txn))
+      first
+      (assert+ {:type     ::no-delta-for-account
+                :account  account
+                :txn      txn})))
 
 (defn apply-txn
   "Takes an account ID, a balance number and applies a
@@ -565,7 +579,8 @@
                                              :value
                                              (assert+ "no value!"))
                         txn*             (txn-op-txn->txn-log-txn value')
-                        delta            (txn-account-delta account txn*)
+                        delta            (txn-account-delta-by-actions
+                                           account txn*)
                         unlogged-deltas' (->> unlogged-deltas
                                               (map (partial + delta))
                                               (into unlogged-deltas))

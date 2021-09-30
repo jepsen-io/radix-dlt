@@ -99,9 +99,14 @@
               log (->> (rc/txn-history conn (a/id->address @accounts
                                                          (:account value)))
                        reverse
-                       (mapv (fn [{:keys [fee message actions]}]
+                       (mapv (fn [{:keys [fee message actions accounting-entries]}]
                                {:fee      fee
                                 :message  message
+                                ; Rewrite accounts to IDs
+                                :entries (mapv (fn [entry]
+                                                 (update entry :owner
+                                                         address->id))
+                                               accounting-entries)
                                 ; Rewrite accounts to IDs
                                 :actions (mapv (fn [action]
                                                  (-> action

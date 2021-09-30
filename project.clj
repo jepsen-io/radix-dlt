@@ -13,8 +13,12 @@
                   :exclusions [commons-codec]]
 
                  [com.radixdlt/radixdlt-java
+                  ; We moved to using the accounting-entries structure rather
+                  ; than the txn actions, which were frequently lying to us.
+                  "1.0.0-feature~client-support-for-txn-accounting-SNAPSHOT"
+
                   ; For testing rc-1.0.2
-                  "1.0.0-rc~1.0.2-SNAPSHOT"
+                  ;"1.0.0-rc~1.0.2-SNAPSHOT"
 
                   ; For testing the fix-user-token-balance branch circa August
                   ; 25, 2021

@@ -19,7 +19,8 @@
                                         TxTimestamp
                                         ValidatorAddress)
            (com.radixdlt.client.lib.api.sync RadixApi)
-           (com.radixdlt.client.lib.dto Action
+           (com.radixdlt.client.lib.dto AccountingEntryDTO
+                                        Action
                                         Balance
                                         BuiltTransaction
                                         FinalizedTransaction
@@ -65,6 +66,11 @@
   "Transforms RadixDLT client types into Clojure structures."
   (->clj [x]))
 
+(def-derived-map AccountingEntryMap [^AccountingEntryDTO e]
+  :owner (->clj (.getOwner e))
+  :delta (.getDelta e)
+  :rri   (.getRri e))
+
 (def-derived-map ActionMap [^Action a]
   :type       (->clj (.getType a))
   :from       (->clj (.getFrom a))
@@ -89,7 +95,8 @@
   :sent-at  (->clj (.getSentAt t))
   :fee      (->clj (.getFee t))
   :message  (->clj (.getMessage t))
-  :actions  (map ->clj (.getActions t)))
+  :actions  (map ->clj (.getActions t))
+  :accounting-entries (map ->clj (.getAccountingEntries t)))
 
 (def-derived-map ValidatorMap [^ValidatorDTO v]
   :address        (->clj (.getAddress v))
@@ -115,6 +122,10 @@
   AccountAddress
   (->clj [x]
     (.toString x))
+
+  AccountingEntryDTO
+  (->clj [x]
+    (->AccountingEntryMap x))
 
   Action
   (->clj [x] (->ActionMap x))
