@@ -710,11 +710,14 @@
              (throw+ e#)))
          ; Not sure why there are two codes for substate not found...
          (catch [:type :radix-dlt/failure, :code -2014] e#
-           (assoc ~op :type :fail, :error [:substate-also-not-found
+           (assoc ~op :type :fail, :error [:substate-not-found-2
                                            (:message e#)]))
          (catch [:type :radix-dlt/failure, :code 1500] e#
            (assoc ~op :type :fail, :error [:substate-not-found
                                            (:message e#)]))
+         ; Ditto, maybe they changed the way codes are assigned?
+         (catch [:type :radix-dlt/failure, :code -1015] e#
+           (assoc ~op :type :fail, :error [:parse-error-2 (:message e#)]))
          (catch [:type :radix-dlt/failure, :code 1604] e#
            (assoc ~op :type :fail, :error [:parse-error (:message e#)]))
          (catch [:type :radix-dlt/failure, :code 2515] e#
