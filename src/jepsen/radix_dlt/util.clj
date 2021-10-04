@@ -45,3 +45,8 @@
   [^bytes bytes]
   (-> (Base64/getEncoder)
       (.encodeToString bytes)))
+
+(defn hex->bytes
+  "Converts a hex string to a byte array."
+  [^String hex]
+  (.toByteArray (BigInteger. hex 16)))

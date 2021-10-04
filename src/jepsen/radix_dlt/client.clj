@@ -39,7 +39,8 @@
            (com.radixdlt.crypto ECKeyPair
                                 ECPublicKey)
            (com.radixdlt.identifiers AID
-                                     AccountAddressing)
+                                     AccountAddressing
+                                     REAddr)
            (com.radixdlt.utils Ints
                                UInt256)
            (com.radixdlt.utils.functional Failure
@@ -288,10 +289,29 @@
 
   String
   (->account-address [x]
-    (let [readdr (-> (com.radixdlt.networks.Addressing/ofNetworkId @current-network-id)
-                     .forAccounts
-                     (.parse x))]
-      (AccountAddress/create readdr))))
+    ; Radix has two (well, really at least three) separate string encodings for
+    ; account addresses, and we need to interpret them both.
+    (if (re-find #"^\{" x)
+      ; The {123...} format is simply a pair of braces around the raw hex
+      ; address. This is how addresses are printed as strings, but we can't
+      ; convert them back into AccountAddresses because that constructor is
+      ; private. Instead we need an REAddr, but REAddr can't interpret this
+      ; kind of string *either*: it expects a byte[], which is (I think) the
+      ; byte array represented by the hex string.
+      (let [; Strip off the { and }
+            hex (subs x 1 (dec (.length x)))
+            ; Convert the hex to a byte array
+            bs (u/hex->bytes hex)
+            ; Then convert that to an REAddr
+            readdr (REAddr/of bs)]
+        ; And convert THAT to an AccountAddress
+        (AccountAddress/create readdr))
+
+      ; This might be an rdx/ddx-prefixed identifier instead.
+      (let [readdr (-> (com.radixdlt.networks.Addressing/ofNetworkId @current-network-id)
+                       .forAccounts
+                       (.parse x))]
+        (AccountAddress/create readdr)))))
 
 (defprotocol ToValidatorAddress
   (->validator-address [x] "Converts something to a ValidatorAddress"))

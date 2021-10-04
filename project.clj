@@ -40,6 +40,7 @@
                   ;"1.0-beta.40-release~1.0-beta.40-SNAPSHOT"
 
                   ; For stokenet???
+                  ; For 1.0.0
                   ;"1.0.0-release~1.0.0-SNAPSHOT"
 
                   ; This breaks clj-http's insecure? option by registering

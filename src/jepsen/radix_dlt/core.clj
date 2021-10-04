@@ -15,6 +15,7 @@
                               [client :as rc]
                               [db :as db]
                               [nemesis :as nemesis]
+                              [pubcheck :as pubcheck]
                               [workload :as workload]
                               [double-spend :as double-spend]
                               [util :as u]])
@@ -242,6 +243,28 @@
                                        (.of (AccountAddressing/bech32 "tdx")))}
                  pprint)))}})
 
+(defn pubcheck-cmd
+  "Command which explores a public radix archive node, looking for traces of
+  consistency anomalies."
+  []
+  {"pubcheck"
+   {:usage "Explores a public Radix archive node, starting with the given address and exploring from there, looking for traces of consistency violations."
+    :opt-spec
+    [["-c" "--concurrency THREADS" "How many threads should we use for the search?"
+      :default 10
+      :parse-fn parse-long
+      :validate [pos? "Must be positive"]]
+
+     ["-n" "--node NODE" "What node should we connect to? See https://docs.radixdlt.com/main/node/cli-install-node-docker.html."
+      :default "mainnet.radixdlt.com"]
+
+     ["-a" "--address ADDR" "What address should we start our search from?"
+      :default "rdx1qspldshtx0s2l2rcnaqtqpqz8vwps2y6d9se0wq25xrg92l66cmp6mcnc6pyu"]
+
+     ["-r" "--recheck" "If set, resets the checked state of every address to unchecked."
+      :default false]]
+    :run (comp pubcheck/pubcheck :options)}})
+
 (defn test-opt-fn
   "Pre-processes options before passing them to the test runner."
   [parsed]
@@ -265,5 +288,6 @@
                                       :opt-spec     cli-opts
                                       :opt-fn       test-opt-fn})
                    (cli/serve-cmd)
+                   (pubcheck-cmd)
                    (keygen-cmd))
             args))
