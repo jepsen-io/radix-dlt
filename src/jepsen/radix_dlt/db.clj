@@ -88,7 +88,7 @@
   "Installs Radix directly."
   [test]
   (c/su (debian/install [:rng-tools :openjdk-11-jdk :unzip])
-        (try+ (c/exec :rngd :-r "/dev/random")
+        (try+ (c/exec :rngd :-r "/dev/urandom") ; /dev/random misbehaves on ec2
               (catch [:exit 10] _
                 ; Already running
                 ))
@@ -341,8 +341,9 @@ export RADIXDLT_VALIDATOR_2_PRIVKEY=UCZRvnk5Jm9hEbpiingYsx7tbjf3ASNLHDf3BLmFaps=
 (defn write-config!
   "Writes out the config file for a node."
   [test node universe]
-  (cu/write-file! (config-str test node universe)
-                  (str dir "/default.config")))
+  (c/su
+    (cu/write-file! (config-str test node universe)
+                    (str dir "/default.config"))))
 
 (defn configure-nginx!
   "Sets up the nginx config files for Radix, generates TLS certs, etc."
@@ -422,7 +423,11 @@ export RADIXDLT_VALIDATOR_2_PRIVKEY=UCZRvnk5Jm9hEbpiingYsx7tbjf3ASNLHDf3BLmFaps=
                   (when (= "BOOTING" (:status res))
                     (throw+ {:type ::still-booting}))
                   res))
-              {:log-interval 30000
+              ; On EC2, for unknown reasons, it takes 14 minutes for Radix to
+              ; go from loading properties on startup to setting the DB cache
+              ; size. :-/
+              {:timeout      (* 16 60 1000)
+               :log-interval 30000
                :log-message (str "Waiting for https://" node "/health")})]
     (dt/assert+ (= "UP" (:status res))
                 {:type ::malformed-node-data?
@@ -490,6 +495,10 @@ export RADIXDLT_VALIDATOR_2_PRIVKEY=UCZRvnk5Jm9hEbpiingYsx7tbjf3ASNLHDf3BLmFaps=
       (let [universe @universe
             key-pair (-> universe
                          (get-in [:validators (node-index test node) :privkey])
+                         (assert+ {:type        ::no-validator-privkey
+                                   :validators  (:validators universe)
+                                   :node        node
+                                   :node-index  (node-index test node)})
                          rc/private-key-str->key-pair)]
         (swap! validators assoc node
                {:node     node

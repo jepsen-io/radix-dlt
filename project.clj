@@ -54,6 +54,7 @@
 
                  ; Types
                  [org.clojure.typed/runtime.jvm "1.0.1"]]
+  :jvm-opts ["-Djava.awt.headless=true"]
   :profiles {:dev {:dependencies [[org.clojure.typed/checker.jvm "1.0.1"]]}}
   :repl-options {:init-ns jepsen.radix-dlt.core}
   :main jepsen.radix-dlt.core)
