@@ -458,23 +458,27 @@
   []
   (reify checker/Checker
     (check [this test history {:keys [analysis] :as opts}]
-      (let [; Compute a map of IDs to txns we submitted
-            txn-txns (->> history
-                          (filter op/invoke?)
-                          (filter (comp #{:txn} :f))
-                          (map :value)
-                          (group-by :id)
-                          (map-vals first))
-            ; Now go through the txn logs for each account, making sure txns
-            ; are faithfully represented.
-            errs (->> (for [[account account-analysis] (:accounts analysis)
-                            txn (:txns (:txn-log account-analysis))]
-                        (when-let [id (:id txn)]
-                          (txn-diff test (get txn-txns id) txn)))
-                      (remove nil?))]
-        {:valid?        (empty? errs)
-         :error-count   (count errs)
-         :errors        (sample 6 errs)}))))
+      (if-not (:faithful test)
+        {:valid?   true
+         :skipped? true}
+
+        (let [; Compute a map of IDs to txns we submitted
+              txn-txns (->> history
+                            (filter op/invoke?)
+                            (filter (comp #{:txn} :f))
+                            (map :value)
+                            (group-by :id)
+                            (map-vals first))
+              ; Now go through the txn logs for each account, making sure txns
+              ; are faithfully represented.
+              errs (->> (for [[account account-analysis] (:accounts analysis)
+                              txn (:txns (:txn-log account-analysis))]
+                          (when-let [id (:id txn)]
+                            (txn-diff test (get txn-txns id) txn)))
+                        (remove nil?))]
+          {:valid?        (empty? errs)
+           :error-count   (count errs)
+           :errors        (sample 6 errs)})))))
 
 (defn balance-vis-checker
   "Renders balances, transaction logs, etc for each account"

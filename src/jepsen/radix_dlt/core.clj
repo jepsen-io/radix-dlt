@@ -171,6 +171,9 @@
     :parse-fn read-string
     :validate validate-non-neg]
 
+   [nil "--[no-]faithful" "Enables checking whether transactions in the log are faithful representations of their original actions."
+    :default true]
+
    [nil "--[no-]self-transfers" "Enables transfers from an account to itself."
     :default true]
 
