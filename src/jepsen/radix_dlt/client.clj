@@ -54,8 +54,9 @@
 ;(def stokenet-network-id
 ;  2)
 
-;(def local-network-id
-;  99)
+(def local-network-id
+  "The ID for local testing networks."
+  99)
 
 (def current-network-id
   "We need this network ID to deserialize responses. We fill it in upon first
@@ -238,10 +239,6 @@
   nil
   (->clj [x] nil))
 
-(defprotocol ToAccountAddress
-  "Converts strings and AccountAddresses back into AccountAddresses."
-  (->account-address [x]))
-
 ;; Keypair management
 
 (defn ^ECKeyPair key-pair
@@ -279,6 +276,13 @@
 
 ;; Coercions for account & validator addresses
 
+(declare ->re-addr)
+
+
+(defprotocol ToAccountAddress
+  "Converts strings and AccountAddresses back into AccountAddresses."
+  (->account-address [x]))
+
 (extend-protocol ToAccountAddress
   AccountAddress
   (->account-address [x] x)
@@ -286,6 +290,10 @@
   ECKeyPair
   (->account-address [x]
     (AccountAddress/create (public-key x)))
+
+  REAddr
+  (->account-address [x]
+    (AccountAddress/create x))
 
   String
   (->account-address [x]
@@ -299,40 +307,81 @@
       ; kind of string *either*: it expects a byte[], which is (I think) the
       ; byte array represented by the hex string.
       (let [; Strip off the { and }
-            hex (subs x 1 (dec (.length x)))
-            ; Convert the hex to a byte array
-            bs (u/hex->bytes hex)
-            ; Then convert that to an REAddr
-            readdr (REAddr/of bs)]
-        ; And convert THAT to an AccountAddress
-        (AccountAddress/create readdr))
+            hex (subs x 1 (dec (.length x)))]
+        (-> hex ->re-addr ->account-address))
 
       ; This might be an rdx/ddx-prefixed identifier instead.
       (let [readdr (-> (com.radixdlt.networks.Addressing/ofNetworkId @current-network-id)
                        .forAccounts
                        (.parse x))]
-        (AccountAddress/create readdr)))))
+        (->account-address readdr)))))
+
+
+(defprotocol ToECPublicKey
+  (->public-key [x] "Converts something to an ECPublicKey"))
+
+(extend-protocol ToECPublicKey
+  ; For strings, we assume they're hex and convert directly
+  String
+  (->public-key [x]
+    (ECPublicKey/fromHex x)))
+
+
+(defprotocol ToREAddr
+  (->re-addr [x] "Converts something to a REAddr"))
+
+(extend-protocol ToREAddr
+  ECPublicKey
+  (->re-addr [x]
+    (REAddr/ofPubKeyAccount x))
+
+  String
+  ; This takes a raw hex string like
+  ; 03a51394329568ae131ac345d253c87da1769be760fc335c9eb30cf220e7855952
+  (->re-addr [hex]
+    (cond (= 66 (.length hex))
+          ; 33 bytes means we've possibly got a raw hex representation of an
+          ; ECPublicKey? God I HATE how fragile this is, I'm so sorry :(
+          (-> hex ->public-key ->re-addr)
+
+          true
+          (let [; Convert the hex to a byte array
+                bs (u/hex->bytes hex)
+                ; Then convert that to an REAddr
+                readdr (REAddr/of bs)]
+            ; And convert THAT to an AccountAddress
+            (AccountAddress/create readdr)))))
+
 
 (defprotocol ToValidatorAddress
   (->validator-address [x] "Converts something to a ValidatorAddress"))
 
 (extend-protocol ToValidatorAddress
-  ValidatorAddress
-  (->validator-address [x] x)
-
-  String
-  (->validator-address [s]
-    (-> (com.radixdlt.networks.Addressing/ofNetworkId @current-network-id)
-        .forValidators
-        (.parse s)
-        ->validator-address))
-
   ECPublicKey
-  (->validator-address [k] (ValidatorAddress/of k))
+  (->validator-address [k]
+    (ValidatorAddress/of k))
 
   ECKeyPair
   (->validator-address [kp]
-    (->validator-address (public-key kp))))
+    (->validator-address (public-key kp)))
+
+  String
+  (->validator-address [s]
+    (if (re-find #"^[0-9a-f]+$" s)
+      ; This is a raw hex address. Try converting it to an ECPublicKey, then to
+      ; a ValidatorAddress.
+      (-> s ->public-key ->validator-address)
+
+      ; Might be a prefixed vb... identifier? God why are there SO many ways to
+      ; refer to the same thing in this system
+      (-> (com.radixdlt.networks.Addressing/ofNetworkId @current-network-id)
+          .forValidators
+          (.parse s)
+          ->validator-address)))
+
+  ValidatorAddress
+  (->validator-address [x] x))
+
 
 (defprotocol ToAID
   "Converts strings and AIDs back into AIDs. We do this because it's nice, for

@@ -221,16 +221,6 @@ export RADIXDLT_VALIDATOR_2_PRIVKEY=UCZRvnk5Jm9hEbpiingYsx7tbjf3ASNLHDf3BLmFaps=
       (or (cache/load-edn path)
           (cache/save-edn! (gen-universe test) path)))))
 
-(defn gen-keys!
-  "Generates keys for the node, writing them to keystore. Wipes keystore if it
-  already exists."
-  []
-  (info "Generating keystore")
-  (c/exec :rm :-f keystore)
-  (c/exec (str bin-dir "/keygen")
-          :--keystore keystore
-          :--password password))
-
 (defn keystore-pubkey
   "Returns the public key from a keystore."
   []
@@ -239,13 +229,26 @@ export RADIXDLT_VALIDATOR_2_PRIVKEY=UCZRvnk5Jm9hEbpiingYsx7tbjf3ASNLHDf3BLmFaps=
                        :--password password
                        :--show-public-key)]
     (if-let [[_ pk] (re-find #"Public key of keypair '.+?':\s+(.*)?\n" out)]
-      (let [_ (info :pk pk)
-            validator-addr (rc/->validator-address pk)]
-        (info :validator-addr validator-addr)
-        (info :str (str validator-addr))
-        (str validator-addr))
+      (let [validator-addr (rc/->validator-address pk)]
+        ; Now we want this as a prefixed string like 'dn...'
+        (.toString validator-addr rc/local-network-id))
       (throw+ {:type ::pubkey-parse-error
                :out  out}))))
+
+(defn gen-keys!
+  "Generates keys for the node, writing them to keystore. Wipes keystore if it
+  already exists. With a universe, also updates the universe atom given to
+  reflect the newly generated key."
+  ([test node]
+   (info "Generating keystore")
+   (c/exec :rm :-f keystore)
+   (c/exec (str bin-dir "/keygen")
+           :--keystore keystore
+           :--password password))
+  ([test node universe]
+   (gen-keys! test node)
+   (swap! universe assoc-in [:validators (node-index test node) :pubkey]
+          (keystore-pubkey))))
 
 (defn init-node?
   "In the context of the given universe, is this node one that we set up using
@@ -359,8 +362,8 @@ export RADIXDLT_VALIDATOR_2_PRIVKEY=UCZRvnk5Jm9hEbpiingYsx7tbjf3ASNLHDf3BLmFaps=
            :network.peers.discover.delay 1000 ; default 1k
            }
 
-    ; Init nodes start up with an explicit genesis txn
-    (init-node? universe node)
+    ; Init nodes (all nodes?) start up with an explicit genesis txn
+    (or true (init-node? universe node))
     (assoc :network.genesis_txn (:genesis-txn universe))
 
     ; Non-init nodes have a key.path which points to the keystore.
@@ -424,21 +427,10 @@ export RADIXDLT_VALIDATOR_2_PRIVKEY=UCZRvnk5Jm9hEbpiingYsx7tbjf3ASNLHDf3BLmFaps=
             "admin" password)))
 
 (defn configure!
-  "Configures Radix and nginx. Takes an atom to a universe; updates it with
-  generated pubkeys, if any."
+  "Configures Radix and nginx. Takes a universe."
   [test node universe]
-  ; If this is an init node, we don't need a keystore--our keys are generated
-  ; as a part of the initial universe. If this *isn't* an init node, we need to
-  ; generate a keystore, and return an updated universe including this node's
-  ; privkey.
-  (let [u @universe]
-    (when-not (init-node? u node)
-      (gen-keys!)
-      (swap! universe assoc-in [:validators (node-index test node) :pubkey]
-             (keystore-pubkey)))
-
-    (write-config! test node u)
-    (configure-nginx! test node)))
+  (write-config! test node universe)
+  (configure-nginx! test node))
 
 (defn restart-nginx!
   "(re)starts nginx"
@@ -528,7 +520,10 @@ export RADIXDLT_VALIDATOR_2_PRIVKEY=UCZRvnk5Jm9hEbpiingYsx7tbjf3ASNLHDf3BLmFaps=
     (jepsen/synchronize test)
 
     (install! test)
-    (configure! test node universe)
+    (when-not (init-node? @universe node)
+      (gen-keys! test node universe))
+    (jepsen/synchronize test)
+    (configure! test node @universe)
     (restart-nginx!)
     (db/start! this test node)
     (await-health node)
@@ -556,7 +551,7 @@ export RADIXDLT_VALIDATOR_2_PRIVKEY=UCZRvnk5Jm9hEbpiingYsx7tbjf3ASNLHDf3BLmFaps=
         {:chdir   dir
          :logfile log-file
          :pidfile pid-file
-         :env     (env test node universe)}
+         :env     (env test node @universe)}
         (str bin-dir "/radixdlt")
         ; No args?
         )))
