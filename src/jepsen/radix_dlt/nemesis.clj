@@ -137,8 +137,9 @@
         {:validators (->> validators
                           (mapv (fn [validator]
                                   (assoc validator :node
-                                         (rdb/validator-address->node (:db test)
-                                                                     (:address validator))))))
+                                         (rdb/validator-address->node
+                                           test
+                                           (:address validator))))))
          ;:validation-info (rdb/validation-node-info node)
          })
       (catch [:type :radix-dlt/failure, :code 1604] e
@@ -192,6 +193,11 @@
         (update op :value assoc
                 :txn-id (:id txn')
                 :status @(:status txn')))
+
+      ;:add-node
+      ;(let [{:keys [join to]} value]
+      ;  (do (c/on-nodes test [join]
+
 
       ; We're doing something simple and maybe unsafe (?): just killing and
       ; wiping the node.

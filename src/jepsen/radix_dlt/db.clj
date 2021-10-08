@@ -168,8 +168,16 @@ export RADIXDLT_VALIDATOR_2_PRIVKEY=UCZRvnk5Jm9hEbpiingYsx7tbjf3ASNLHDf3BLmFaps=
 (defn gen-universe
   "Generates an initial universe. Returns a map of:
 
-    {:validators      [{:privkey \"...\"} ...]
-     :genesis-txn     \"hex string\"}"
+    {:validators      {0 {:privkey \"...\"}
+                       1 {:privkey \"...\"} ...}
+     :genesis-txn     \"hex string\"}
+     :init-nodes      #{\"n1\", ...}}
+
+  As the universe evolves over the course of a test, we have to distinguish
+  beween nodes which use hardcoded genesis-txn/validator-keys from the initial
+  generated universe, and those which are dynamically joined to the cluster
+  (e.g. by the membership nemesis). We store this set of nodes in
+  `:init-nodes`."
   [test]
   (info "Generating universe")
   (c/su
@@ -193,7 +201,17 @@ export RADIXDLT_VALIDATOR_2_PRIVKEY=UCZRvnk5Jm9hEbpiingYsx7tbjf3ASNLHDf3BLmFaps=
             ;(info "dev universe:\n" out)
             (-> out
                 parse-universe-exports
-                validate-universe-exports)))))
+                validate-universe-exports
+                ; Add init-nodes: a set of all nodes which are in the initial
+                ; universe
+                (assoc :init-nodes (into (sorted-set)
+                                         (take 5 (:nodes test))))
+                ; Rewrite validators to be a map of indexes to validators, so
+                ; we can assoc into it freely.
+                (update :validators (fn [vs]
+                                      (->> vs
+                                           (map-indexed vector)
+                                           (into (sorted-map))))))))))
 
 (defn get-universe
   "Returns a cached universe, or generates a new one."
@@ -204,37 +222,64 @@ export RADIXDLT_VALIDATOR_2_PRIVKEY=UCZRvnk5Jm9hEbpiingYsx7tbjf3ASNLHDf3BLmFaps=
           (cache/save-edn! (gen-universe test) path)))))
 
 (defn gen-keys!
-  "Generates keys for the node, writing them to secret-dir"
+  "Generates keys for the node, writing them to keystore. Wipes keystore if it
+  already exists."
   []
+  (info "Generating keystore")
+  (c/exec :rm :-f keystore)
   (c/exec (str bin-dir "/keygen")
           :--keystore keystore
           :--password password))
+
+(defn keystore-pubkey
+  "Returns the public key from a keystore."
+  []
+  (let [out (c/exec (str bin-dir "/keygen")
+                       :--keystore keystore
+                       :--password password
+                       :--show-public-key)]
+    (if-let [[_ pk] (re-find #"Public key of keypair '.+?':\s+(.*)?\n" out)]
+      (let [_ (info :pk pk)
+            validator-addr (rc/->validator-address pk)]
+        (info :validator-addr validator-addr)
+        (info :str (str validator-addr))
+        (str validator-addr))
+      (throw+ {:type ::pubkey-parse-error
+               :out  out}))))
+
+(defn init-node?
+  "In the context of the given universe, is this node one that we set up using
+  the initially generated universe, or one that dynamically joined?"
+  [universe node]
+  (contains? (:init-nodes universe) node))
 
 (defn env
   "The environment map for a node."
   [test node universe]
   ;(info :universe (pprint-str universe))
-  (assert (= (count (:nodes test)) (:validators test))
-          "We don't know how to start a cluster where some nodes aren't validators yet.")
-  {:JAVA_OPTS "-server -Xms3g -Xmx3g -XX:+HeapDumpOnOutOfMemoryError -Djavax.net.ssl.trustStore=/etc/ssl/certs/java/cacerts -Djavax.net.ssl.trustStoreType=jks -Djava.security.egd=file:/dev/urandom -DLog4jContextSelector=org.apache.logging.log4j.core.async.AsyncLoggerContextSelector"
-   :RADIX_NODE_KEYSTORE_PASSWORD password
-   :RADIXDLT_UNIVERSE_ENABLE true
-   :RADIXDLT_NODE_KEY (dt/assert+
-                        (get-in universe
-                                [:validators
-                                 (node-index test node)
-                                 :privkey])
-                        {:type       :no-node-key
-                         :node       node
-                         :index      (node-index test node)
-                         :validators (:validators universe)})})
+  (cond->
+    {:JAVA_OPTS "-server -Xms3g -Xmx3g -XX:+HeapDumpOnOutOfMemoryError -Djavax.net.ssl.trustStore=/etc/ssl/certs/java/cacerts -Djavax.net.ssl.trustStoreType=jks -Djava.security.egd=file:/dev/urandom -DLog4jContextSelector=org.apache.logging.log4j.core.async.AsyncLoggerContextSelector"
+     :RADIX_NODE_KEYSTORE_PASSWORD password}
+
+    ; If they're an initial node, we tell Radix to use the raw universe string
+    ; we provide in the config, and pass their key as a raw env var.
+    (init-node? universe node)
+    (assoc :RADIXDLT_UNIVERSE_ENABLE true
+           :RADIXDLT_NODE_KEY (dt/assert+
+                                (get-in universe
+                                        [:validators
+                                         (node-index test node)
+                                         :privkey])
+                                {:type       :no-node-key
+                                 :node       node
+                                 :index      (node-index test node)
+                                 :validators (:validators universe)}))))
 
 (defn config
-  "The configuration map for a node."
+  "The configuration map for a node"
   [test node universe]
   (cond-> {:ntp                        false
            :network.id                 network-id
-           :network.genesis_txn        (:genesis-txn universe)
            :network.p2p.default_port   listen-port
            :network.p2p.listen_port    listen-port
            :network.p2p.broadcast_port broadcast-port
@@ -313,23 +358,27 @@ export RADIXDLT_VALIDATOR_2_PRIVKEY=UCZRvnk5Jm9hEbpiingYsx7tbjf3ASNLHDf3BLmFaps=
            ; nodes, in milliseconds.
            :network.peers.discover.delay 1000 ; default 1k
            }
-    ; All non-primary nodes get the primary as their seed
-    (not= node (primary test))
+
+    ; Init nodes start up with an explicit genesis txn
+    (init-node? universe node)
+    (assoc :network.genesis_txn (:genesis-txn universe))
+
+    ; Non-init nodes have a key.path which points to the keystore.
+    (not (init-node? universe node))
+    (assoc :node.key.path keystore)
+
+    ; All non-primary nodes get all other nodes (with known pubkeys) as their
+    ; seeds.
+    true ; (not= node (primary test))
     (assoc :network.p2p.seed_nodes
-           (let [n (primary test)]
-             (str "radix://"
-                  (assert+
-                    (get-in universe
-                            [:validators
-                             (node-index test n)
-                             :pubkey])
-                    {:type :no-node-in-universe-validators
-                     :node node
-                     :validators (:validators universe)})
-                  "@"
-                  (cn/ip n)
-                  ":" broadcast-port
-                  )))))
+           (->> (:nodes test)
+                (remove #{node})
+                (keep (fn [n]
+                        (when-let [pk (get-in universe [:validators
+                                                       (node-index test n)
+                                                       :pubkey])]
+                          (str "radix://" pk "@" (cn/ip n) ":" broadcast-port))))
+                (str/join ",")))))
 
 (defn config-str
   "The configuration file string for a node."
@@ -375,13 +424,21 @@ export RADIXDLT_VALIDATOR_2_PRIVKEY=UCZRvnk5Jm9hEbpiingYsx7tbjf3ASNLHDf3BLmFaps=
             "admin" password)))
 
 (defn configure!
-  "Configures Radix and nginx."
+  "Configures Radix and nginx. Takes an atom to a universe; updates it with
+  generated pubkeys, if any."
   [test node universe]
-  ; We don't generate a keystore; all our keys are generated as a part of
-  ; the initial universe, and passed in via env vars.
-  ; (gen-keys!)
-  (write-config! test node universe)
-  (configure-nginx! test node))
+  ; If this is an init node, we don't need a keystore--our keys are generated
+  ; as a part of the initial universe. If this *isn't* an init node, we need to
+  ; generate a keystore, and return an updated universe including this node's
+  ; privkey.
+  (let [u @universe]
+    (when-not (init-node? u node)
+      (gen-keys!)
+      (swap! universe assoc-in [:validators (node-index test node) :pubkey]
+             (keystore-pubkey)))
+
+    (write-config! test node u)
+    (configure-nginx! test node)))
 
 (defn restart-nginx!
   "(re)starts nginx"
@@ -441,34 +498,37 @@ export RADIXDLT_VALIDATOR_2_PRIVKEY=UCZRvnk5Jm9hEbpiingYsx7tbjf3ASNLHDf3BLmFaps=
     (c/exec :rm :-rf (str dir "/data") (str dir "/default.config"))))
 
 (defn validator-address->node
-  "Takes a DB and string representation of a validator address (e.g.
+  "Takes a test and string representation of a validator address (e.g.
   vb1qwyxnktxunxsvav0ac769m52tagzwy66kckzu8eftl0mew4pnpfj7zzrdty) and converts
   it to a node name like \"n1\"."
-  [db validator-address]
-  (assert+ (->> db :validators deref vals
-                (filter (comp #{validator-address} :address))
-                first
-                :node)
-           {:type       :no-such-validator
-            :address    validator-address
-            :validators @(:validators db)}))
+  [test validator-address]
+  (let [validators (-> test :db :universe deref :validators)]
+    (->> validators
+         (keep (fn [[index v]]
+                 (when (-> (:privkey v)
+                           rc/private-key-str->key-pair
+                           rc/->validator-address
+                           str
+                           (= validator-address))
+                   (nth (:nodes test) index))))
+         first
+         (assert+ {:type       :no-such-validator
+                   :address    validator-address
+                   :validators validators}))))
 
-(defrecord DB [; A promise of a Universe structure
-               universe
-               ; An atom containing a map of node names to maps like
-               ; {:node     "n1"
-               ;  :key-pair ECKeyPair
-               ;  :validator-address "vb..."}
-               validators]
+(defrecord DB [; An atom wrapping the current Universe structure
+               universe]
   db/DB
   (setup! [this test node]
     (when (= node (primary test))
-      (deliver universe (get-universe test))
+      (assert (nil? @universe))
+      (compare-and-set! universe nil (get-universe test))
       ;(info :universe (pprint-str @uni))
       )
+    (jepsen/synchronize test)
 
     (install! test)
-    (configure! test node @universe)
+    (configure! test node universe)
     (restart-nginx!)
     (db/start! this test node)
     (await-health node)
@@ -488,31 +548,18 @@ export RADIXDLT_VALIDATOR_2_PRIVKEY=UCZRvnk5Jm9hEbpiingYsx7tbjf3ASNLHDf3BLmFaps=
      (str dir "/default.config")
      ])
 
+
   db/Process
   (start! [this test node]
     (c/su
-      ; Squirrel away this node's validator information
-      (let [universe @universe
-            key-pair (-> universe
-                         (get-in [:validators (node-index test node) :privkey])
-                         (assert+ {:type        ::no-validator-privkey
-                                   :validators  (:validators universe)
-                                   :node        node
-                                   :node-index  (node-index test node)})
-                         rc/private-key-str->key-pair)]
-        (swap! validators assoc node
-               {:node     node
-                :key-pair key-pair
-                :address  (str (rc/->validator-address key-pair))})
-        ;(info :validators @validators)
-        (cu/start-daemon!
-          {:chdir   dir
-           :logfile log-file
-           :pidfile pid-file
-           :env     (env test node universe)}
-          (str bin-dir "/radixdlt")
-          ; No args?
-          ))))
+      (cu/start-daemon!
+        {:chdir   dir
+         :logfile log-file
+         :pidfile pid-file
+         :env     (env test node universe)}
+        (str bin-dir "/radixdlt")
+        ; No args?
+        )))
 
   (kill! [this test node]
     (c/su
@@ -552,4 +599,4 @@ export RADIXDLT_VALIDATOR_2_PRIVKEY=UCZRvnk5Jm9hEbpiingYsx7tbjf3ASNLHDf3BLmFaps=
 (defn db
   "The Radix DLT database."
   []
-  (DB. (promise) (atom {})))
+  (map->DB {:universe (atom nil)}))
