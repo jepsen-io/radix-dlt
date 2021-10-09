@@ -469,7 +469,7 @@ export RADIXDLT_VALIDATOR_2_PRIVKEY=UCZRvnk5Jm9hEbpiingYsx7tbjf3ASNLHDf3BLmFaps=
               (fn []
                 (let [res (:body (http/get (str "https://" node "/health")
                                            (admin-http-opts)))]
-                  (when (= "BOOTING" (:status res))
+                  (when (#{"BOOTING" "SYNCING"} (:status res))
                     (throw+ {:type ::still-booting}))
                   res))
               ; On EC2, for unknown reasons, it takes 14 minutes for Radix to
@@ -488,6 +488,36 @@ export RADIXDLT_VALIDATOR_2_PRIVKEY=UCZRvnk5Jm9hEbpiingYsx7tbjf3ASNLHDf3BLmFaps=
   []
   (c/su
     (c/exec :rm :-rf (str dir "/data") (str dir "/default.config"))))
+
+(defn remove-node!
+  "Removes a node from the cluster. Takes a test and a node. Kills the given
+  node, wipes its data files, and removes it from the universe atom."
+  [test node]
+  (-> test :db :universe
+      (swap! (fn [u]
+               (-> u
+                   (update :validators dissoc (node-index test node))
+                   (update :init-nodes disj node)))))
+  (c/on-nodes test [node]
+              (fn [test node]
+                (db/kill! (:db test) test node)
+                (wipe!))))
+
+(defn add-node!
+  "Adds a node to the cluster. Takes a test and node. Ensures the node isn't in
+  the universe currently, then generates new keys, configures the node, and
+  starts it. Updates the universe to include the new node."
+  [test node]
+  (let [db        (:db test)
+        universe  (:universe db)]
+    (assert (not (contains? (:validators @universe) (node-index test node))))
+    (c/on-nodes test [node]
+                (fn [_ _]
+                  (gen-keys! test node universe)
+                  (configure! test node @universe)
+                  (db/start! db test node)
+                  ; Might skip this later
+                  (await-health node)))))
 
 (defn validator-address->node
   "Takes a test and string representation of a validator address (e.g.

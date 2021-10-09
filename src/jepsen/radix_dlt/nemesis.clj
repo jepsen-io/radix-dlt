@@ -97,8 +97,7 @@
   (when-let [node (-> free vec rand-nth-empty)]
     {:type  :info
      :f     :add-node,
-     :value {:add node
-             :seed (rand-nth (active-nodes membership))}}))
+     :value node}))
 
 (defn unregister-node-op
   "Takes a membership state and returns an operation for unregistering a node
@@ -142,9 +141,9 @@
                                            (:address validator))))))
          ;:validation-info (rdb/validation-node-info node)
          })
-      (catch [:type :radix-dlt/failure, :code 1604] e
-        ; Parse error
-        nil)))
+      (catch [:type :radix-dlt/failure, :code 1604] e) ; Parse error
+      (catch [:type :radix-dlt/failure, :code 1004] e) ; Conn refused
+      ))
 
   (merge-views [this test]
     ; We take each node's own view of its validation node info, and make a map
@@ -194,18 +193,14 @@
                 :txn-id (:id txn')
                 :status @(:status txn')))
 
-      ;:add-node
-      ;(let [{:keys [join to]} value]
-      ;  (do (c/on-nodes test [join]
-
+      :add-node
+      (do (rdb/add-node! test value)
+          (assoc op :value [:added value]))
 
       ; We're doing something simple and maybe unsafe (?): just killing and
       ; wiping the node.
       :remove-node
-      (do (c/on-nodes test [value]
-                      (fn [test node]
-                        (db/kill! (:db test) test node)
-                        (rdb/wipe!)))
+      (do (rdb/remove-node! test value)
           (assoc op :value [:removed value]))))
 
   (resolve [this test]
@@ -214,13 +209,26 @@
   (resolve-op [this test [op op']]
     ;(info :resolve-op :op op :op' op')
     (case (:f op)
+      ; We assume adds take place immediately too.
+      :add-node
+      (let [[outcome node] (:value op')]
+        (if (= :added outcome)
+          (update this :free disj node)
+          (throw+ {:type :unexpected-add-node-value
+                   :op op'})))
+
       ; We assume removes take place immediately.
       :remove-node
-      (if (= :removed (first (:value op')))
-        ; Record that this node is now free
-        (update this :free conj (:value op))
-        (throw+ {:type :unexpected-remove-node-value
-                 :op op'}))
+      (let [[outcome node] (:value op')]
+        (if (= :removed outcome)
+          ; Record that this node is now free
+          (update this :free conj node)
+          (throw+ {:type :unexpected-remove-node-value
+                   :op op'})))
+
+      ; Stakes resolve immediately too
+      :stake
+      this
 
       nil))
 

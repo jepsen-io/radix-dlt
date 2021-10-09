@@ -629,6 +629,27 @@
                  (assoc @(:status txn)
                         :type :txn-unconfirmed))))))
 
+(defn old-paginated
+  "There are two separate styles for pagination in the API. One uses
+  OptionaLong, the other uses Optional<Cursor>. This is for the old
+  Optional<Cursor> style."
+  ([chunk results]
+   ; A bit weird: here the absence of a cursor means we're *starting* the
+   ; sequence; later the absence of a cursor means the sequence is *ending*.
+   (lazy-seq
+     ; Fetch initial chunk
+     (let [c (->clj (chunk (Optional/empty)))]
+       (concat (results c)
+               (old-paginated chunk results (:cursor c))))))
+  ([chunk results cursor]
+   ; Without a cursor, we're at the end of the sequence. Right? Right? Argh why
+   ; are there two different ways of paginating :-O
+   (when cursor
+     (lazy-seq
+       (let [c (-> cursor Optional/of chunk ->clj)]
+         (concat (results c)
+                 (old-paginated chunk results (:cursor c))))))))
+
 (defn paginated
   "Takes a function (chunk cursor), where cursor is an Optional<Cursor>, where
   `chunk` returns something which can be coerced via ->clj to a map of {:cursor
@@ -668,14 +689,14 @@
 
 (def validator-chunk-size
   "How many validators do we fetch at a time, by default?"
-  128)
+  32)
 
 (defn validators
   "Takes a Radix Client and returns a lazy seq of validator states."
   [^RadixApi client]
-  (paginated (fn chunk [cursor]
-               (-> client .validator (.list validator-chunk-size cursor)))
-             :validators))
+  (old-paginated (fn chunk [cursor]
+                   (-> client .validator (.list validator-chunk-size cursor)))
+                 :validators))
 
 (defn await-initial-convergence
   "When Radix first starts up, there's a period of ~80 seconds where it's not
