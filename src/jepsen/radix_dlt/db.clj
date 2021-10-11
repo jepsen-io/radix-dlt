@@ -569,7 +569,8 @@ export RADIXDLT_VALIDATOR_2_PRIVKEY=UCZRvnk5Jm9hEbpiingYsx7tbjf3ASNLHDf3BLmFaps=
   db/LogFiles
   (log-files [this test node]
     [log-file
-     (str dir "/logs/radixdlt-core.log")
+     ; The stdout logs have more everything that gets logged here
+     ;(str dir "/logs/radixdlt-core.log")
      (str dir "/default.config")
      ])
 
