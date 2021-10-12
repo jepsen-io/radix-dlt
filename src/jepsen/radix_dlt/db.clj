@@ -240,15 +240,17 @@ export RADIXDLT_VALIDATOR_2_PRIVKEY=UCZRvnk5Jm9hEbpiingYsx7tbjf3ASNLHDf3BLmFaps=
   already exists. With a universe, also updates the universe atom given to
   reflect the newly generated key."
   ([test node]
-   (info "Generating keystore")
-   (c/exec :rm :-f keystore)
-   (c/exec (str bin-dir "/keygen")
-           :--keystore keystore
-           :--password password))
+   (c/su
+     (info "Generating keystore")
+     (c/exec :rm :-f keystore)
+     (c/exec (str bin-dir "/keygen")
+             :--keystore keystore
+             :--password password)))
   ([test node universe]
-   (gen-keys! test node)
-   (swap! universe assoc-in [:validators (node-index test node) :pubkey]
-          (keystore-pubkey))))
+   (c/su
+     (gen-keys! test node)
+     (swap! universe assoc-in [:validators (node-index test node) :pubkey]
+            (keystore-pubkey)))))
 
 (defn init-node?
   "In the context of the given universe, is this node one that we set up using
@@ -547,12 +549,12 @@ export RADIXDLT_VALIDATOR_2_PRIVKEY=UCZRvnk5Jm9hEbpiingYsx7tbjf3ASNLHDf3BLmFaps=
       (compare-and-set! universe nil (get-universe test))
       ;(info :universe (pprint-str @uni))
       )
-    (jepsen/synchronize test)
+    (jepsen/synchronize test 300)
 
     (install! test)
     (when-not (init-node? @universe node)
       (gen-keys! test node universe))
-    (jepsen/synchronize test)
+    (jepsen/synchronize test 300)
     (configure! test node @universe)
     (restart-nginx!)
     (db/start! this test node)
