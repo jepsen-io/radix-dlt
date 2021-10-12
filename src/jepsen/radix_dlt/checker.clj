@@ -2,6 +2,7 @@
   "Analyzes the correctness of Radix-DLT histories."
   (:require [clojure [pprint :refer [pprint]]]
             [clojure.tools.logging :refer [info warn]]
+            [dom-top.core :refer [assert+]]
             [elle [core :as elle]
                   [graph :as g]
                   [list-append :as list-append]]
@@ -12,13 +13,15 @@
             [jepsen.checker.timeline :as timeline]
             [jepsen.radix-dlt [balance-vis :as balance-vis]
                               [util :as u]]
-            [jepsen.radix-dlt.checker.util :refer [analysis
+            [jepsen.radix-dlt.checker.util :refer [add-instances
+                                                   analysis
                                                    balance->txn-id-prefix
                                                    rewrite-info-txns
                                                    txn-id
                                                    txn-op-accounts]]
             [jepsen.tests.cycle.append :as append]
-            [knossos [op :as op]]))
+            [knossos [op :as op]
+                     [history :as history]]))
 
 (def elle-lock
   "We're going to pull some thread-unsafe with-redefs weirdness when using
@@ -223,19 +226,34 @@
   anomaly detectors to bear, and it's sort of like treating the nodes, rather
   than clients, as if they were processses.
 
+  As an added complication, when the nemesis removes or adds nodes, they *lose*
+  their identity and can no longer be considered the same node in this graph.
+  We therefore compute *instances* of each node:
+
+  add  added       remove removed
+  |------------i1---------------|  add added
+                                   |-----------i2------- - - -
+
+  Operations which could only possibly have interacted with a single instance
+  are assigned to that instance's graph. If an invocation and completion fall
+  into different instances, we compute no dependency edges.
+
   Note that when transactions are submitted (via :f :txn) to one node, and
   confirmed (via :f :check-txn) on another, we use the check-txn process
   (recorded in the :txn op's :checked-by field) to determine the node."
   [test history]
-  (let [node-count (count (:nodes test))]
+  ;(info :history)
+  ;(pprint (take 3 history))
+  (let [pairs (history/pair-index+ history)]
     (->> history
-         ; Partition by node
-         (group-by (fn group [{:keys [process checked-by] :as op}]
-                     ;(when checked-by
-                       ;(info "using checked-by " checked-by " instead of " process " for txn " (pr-str op)))
-                     (mod (or checked-by process) node-count)))
+         ; Strip out operations which belong to multiple instances
+         (remove (fn [op]
+                   (not= (:instance op)
+                         (:instance (get pairs op)))))
+         ; Partition by instance
+         (group-by :instance)
          vals
-         ; Compute a realtime graph for each node separately
+         ; Compute a realtime graph for each instance separately
          (map elle-realtime-graph)
          ; And call those edges :process
          (map realtime->process-edges))))
@@ -595,7 +613,9 @@
             ; We start by rewriting info txns using check-txn operations--we're
             ; going to hit a *ton* of timeouts, and basically everything
             ; benefits from reducing those.
-            history  (rewrite-info-txns history)]
+            history  (->> history
+                          (add-instances test)
+                          rewrite-info-txns)]
         (if (:check-only-raw-txn-log test)
           ; We're trying to do this as quick as possible; don't even bother
           ; with analysis phase.

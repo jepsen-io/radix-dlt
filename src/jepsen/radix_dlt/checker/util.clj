@@ -862,5 +862,75 @@
                    (conj history' op)
                    txn's)))))))
 
+(defn add-instances
+  "Takes a test and a history with nemesis operations and rewrites it to attach
+  an :instance field to each operation, which is a tuple of [node, i], where
+  `i` is 0, 1, 2, ...; a distinct value for each time the node is added to the
+  cluster. We use this :instance field to partition the dependency graph for
+  per-node monotonic constraints. Intended to be run *after* rewrite-info-txns,
+  because it uses the :checked-by field for txn completions."
+  [test history]
+  (let [n          (count history)
+        nodes      (:nodes test)
+        node-count (count nodes)]
+    (loop [; Which element of the history are we looking at?
+           i         0
+           ; A map of nodes to the state of each node. We use this
+           ; to reject add/add or remove/remove back to back.
+           states    (zipmap nodes (repeat :added))
+           ; The current instance for each op
+           instances (zipmap nodes (repeat 0))
+           ; The new history
+           history   history]
+      (if (= i n)
+        ; Done
+        (do (->> instances
+                 (map-vals inc)
+                 (into (sorted-map))
+                 (info "Number of instances per node:"))
+            history)
+        (let [i' (inc i)
+              {:keys [process checked-by f type value] :as op} (nth history i)]
+          (if (= :nemesis process)
+            (if (and (#{:add-node :remove-node} f)
+                     (string? value))
+              ; This is an invocation of a nemesis add-node or remove-node
+              ; operation, and the `value` is our node. Update our instance
+              ; state accordingly...
+              (case f
+                ; This is the invocation of the add-node op; marks the start
+                ; of a new instance.
+                :add-node
+                (do (assert+ (= :removed (get states value))
+                             {:type ::can't-add-twice
+                              :op   op
+                              :node value})
+                    (recur i'
+                           (assoc states value :added)
+                           (update instances value inc)
+                           history))
+
+                ; This is the invocation of the remove-node op. Flip node
+                ; state
+                :remove-node
+                (do (assert+ (= :added (get states value))
+                             {:type ::can't-remove-twice
+                              :op   op
+                              :node value})
+                    (recur i'
+                           (assoc states value :removed)
+                           instances
+                           history)))
+
+              ; Some other nemesis operation; pass it through unchanged
+              (recur i' states instances history))
+
+            ; Not a nemesis operation. Derive the node from the
+            ; process/checked-by field, and compute the :instance tag for
+            ; this op.
+            (let [node      (nth nodes (mod (or checked-by process) node-count))
+                  instance  [node (get instances node)]]
+              (recur i' states instances
+                     (assoc-in history [i :instance] instance)))))))))
 
 )
