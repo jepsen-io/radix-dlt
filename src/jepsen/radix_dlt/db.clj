@@ -40,6 +40,10 @@
   "Where do we put the daemon's pidfile?"
   (str dir "/radix.pid"))
 
+(def config-file
+  "Where do we put the config file?"
+  (str dir "/default.config"))
+
 (def dist-dir
   "Where do we extract Radix's package to?"
   dir)
@@ -364,7 +368,8 @@ export RADIXDLT_VALIDATOR_2_PRIVKEY=UCZRvnk5Jm9hEbpiingYsx7tbjf3ASNLHDf3BLmFaps=
            :network.peers.discover.delay 1000 ; default 1k
            }
 
-    ; Init nodes (all nodes?) start up with an explicit genesis txn
+    ; Init nodes (nope, looks like it's gotta be all nodes) start up with an
+    ; explicit genesis txn
     (or true (init-node? universe node))
     (assoc :network.genesis_txn (:genesis-txn universe))
 
@@ -372,8 +377,7 @@ export RADIXDLT_VALIDATOR_2_PRIVKEY=UCZRvnk5Jm9hEbpiingYsx7tbjf3ASNLHDf3BLmFaps=
     (not (init-node? universe node))
     (assoc :node.key.path keystore)
 
-    ; All non-primary nodes get all other nodes (with known pubkeys) as their
-    ; seeds.
+    ; All nodes get all other nodes (with known pubkeys) as their seeds.
     true ; (not= node (primary test))
     (assoc :network.p2p.seed_nodes
            (->> (:nodes test)
@@ -397,7 +401,7 @@ export RADIXDLT_VALIDATOR_2_PRIVKEY=UCZRvnk5Jm9hEbpiingYsx7tbjf3ASNLHDf3BLmFaps=
   [test node universe]
   (c/su
     (cu/write-file! (config-str test node universe)
-                    (str dir "/default.config"))))
+                    config-file)))
 
 (defn configure-nginx!
   "Sets up the nginx config files for Radix, generates TLS certs, etc."
@@ -489,7 +493,7 @@ export RADIXDLT_VALIDATOR_2_PRIVKEY=UCZRvnk5Jm9hEbpiingYsx7tbjf3ASNLHDf3BLmFaps=
   "Deletes all data & config files (but not logs)"
   []
   (c/su
-    (c/exec :rm :-rf (str dir "/data") (str dir "/default.config"))))
+    (c/exec :rm :-rf (str dir "/data") config-file)))
 
 (defn remove-node!
   "Removes a node from the cluster. Takes a test and a node. Kills the given
@@ -570,24 +574,28 @@ export RADIXDLT_VALIDATOR_2_PRIVKEY=UCZRvnk5Jm9hEbpiingYsx7tbjf3ASNLHDf3BLmFaps=
 
   db/LogFiles
   (log-files [this test node]
-    [log-file
+    [config-file
+     log-file
      ; The stdout logs have more everything that gets logged here
      ;(str dir "/logs/radixdlt-core.log")
-     (str dir "/default.config")
      ])
 
 
   db/Process
   (start! [this test node]
-    (c/su
-      (cu/start-daemon!
-        {:chdir   dir
-         :logfile log-file
-         :pidfile pid-file
-         :env     (env test node @universe)}
-        (str bin-dir "/radixdlt")
-        ; No args?
-        )))
+    (if-not (cu/exists? config-file)
+      (do (info "Not starting" node "- it does not belong to the cluster right now.")
+          :not-a-member)
+      (c/su
+        (cu/start-daemon!
+          {:chdir   dir
+           :logfile log-file
+           :pidfile pid-file
+           :env     (env test node @universe)}
+          (str bin-dir "/radixdlt")
+          ; No args?
+          )
+        :started)))
 
   (kill! [this test node]
     (c/su
