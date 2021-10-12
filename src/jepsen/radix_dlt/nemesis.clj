@@ -240,14 +240,18 @@
   "A membership nemesis package for Radix-DLT"
   [opts]
   (info :membership opts)
-  (membership/package
-    (assoc opts
-           :membership {:state (map->Membership
-                                 {:free #{}
-                                  })
-                        :log-node-views? false
-                        :log-resolve? true
-                        :log-view? true})))
+  (-> opts
+      (assoc
+        :membership {:state (map->Membership
+                              {:free #{}
+                               })
+                     :log-node-views? false
+                     :log-resolve? true
+                     :log-view? true})
+      membership/package
+      (assoc :perf #{{:name "member"
+                      :fs   #{:add-node :remove-node :stake}
+                      :color "#A66AD8"}})))
 
 (defn rollback-package
   "Nodes in Radix basically aren't supposed to fail: when they do, a certain
