@@ -36,10 +36,6 @@
   "Where do we put console logs?"
   (str dir "/radix.log"))
 
-(def pid-file
-  "Where do we put the daemon's pidfile?"
-  (str dir "/radix.pid"))
-
 (def config-file
   "Where do we put the config file?"
   (str dir "/default.config"))
@@ -522,8 +518,11 @@ export RADIXDLT_VALIDATOR_2_PRIVKEY=UCZRvnk5Jm9hEbpiingYsx7tbjf3ASNLHDf3BLmFaps=
                   (gen-keys! test node universe)
                   (configure! test node @universe)
                   (db/start! db test node)
-                  ; Might skip this later
-                  (await-health node)))))
+                  ; We intentionally *don't* wait here because the cluster
+                  ; might not be in a state where the node can successfully
+                  ; join and complete the boot process.
+                  ;(await-health node)
+                  ))))
 
 (defn validator-address->node
   "Takes a test and string representation of a validator address (e.g.
@@ -561,7 +560,13 @@ export RADIXDLT_VALIDATOR_2_PRIVKEY=UCZRvnk5Jm9hEbpiingYsx7tbjf3ASNLHDf3BLmFaps=
     (jepsen/synchronize test 300)
     (configure! test node @universe)
     (restart-nginx!)
-    (db/start! this test node)
+
+    ; We might have spawned a JVM during the build process; kill it now.
+    (cu/grepkill! :kill "java")
+    (let [res (db/start! this test node)]
+      (assert+ (= :started res) {:type :failed-to-start-daemon
+                                 :node node
+                                 :res  res}))
     (await-health node)
     ; Hack: even though the /node is ready, the client api might take
     ; longer, and we'll get weird parse errors when HTML shows up instead
@@ -588,19 +593,19 @@ export RADIXDLT_VALIDATOR_2_PRIVKEY=UCZRvnk5Jm9hEbpiingYsx7tbjf3ASNLHDf3BLmFaps=
           :not-a-member)
       (c/su
         (cu/start-daemon!
-          {:chdir   dir
-           :logfile log-file
-           :pidfile pid-file
-           :env     (env test node @universe)}
+          {:chdir             dir
+           :logfile           log-file
+           :pidfile           nil
+           :exec              "/usr/bin/java"
+           :env               (env test node @universe)}
           (str bin-dir "/radixdlt")
           ; No args?
-          )
-        :started)))
+          ))))
 
   (kill! [this test node]
     (c/su
       ; The script immediately execs, so pidfile is actually useless here
-      (cu/stop-daemon! "java" pid-file)))
+      (cu/stop-daemon! "java" nil)))
 
   db/Pause
   (pause! [this test node]

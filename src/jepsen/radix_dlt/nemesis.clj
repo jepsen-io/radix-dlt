@@ -6,7 +6,7 @@
                     [db :as db]
                     [generator :as gen]
                     [nemesis :as n]
-                    [util :refer [pprint-str rand-nth-empty]]]
+                    [util :as util :refer [pprint-str rand-nth-empty]]]
             [jepsen.nemesis [combined :as nc]
                             [membership :as membership]]
             [jepsen.radix-dlt [client :as rc]
@@ -264,11 +264,47 @@
   ; TODO: need capability to change nodes between validators and non-validators
   )
 
+(defn scenario-package
+  "A special package which generates specific sequences of faults. Useful for
+  targeting specific scenarios instead of random schedules."
+  [opts]
+  (let [faults (:faults opts)]
+    {:generator
+     (cond
+       ; The repeated-start scenario emits a series of start operations on
+       ; every node. Helpful for testing the daemonization code to make sure
+       ; repeated starts don't actually start multiple JVMs.
+       (:repeated-start faults)
+       (repeat {:type :info, :f :start, :value :all}))}))
+
 (defn package
   "Given CLI options, constructs a package of {:generator, :final-generator,
   :nemesis, ..."
   [opts]
-  (-> opts
-      nc/nemesis-packages
-      (conj (membership-package opts))
-      nc/compose-packages))
+  ; Something a bit weird: the underlying packages are going to do their own
+  ; scheduling via `gen/stagger` based on the interval we provide, but we also
+  ; want to introduce long recovery periods, and we *don't* want the generators
+  ; to try and catch up when those recovery windows are over. To that end, we
+  ; pass an interval of 0, then wrap the entire thing in our own stagger.
+  ;
+  ; This is kind of a hack, and points to the need for an alternate version of
+  ; stagger that plays well when not asked for operations.
+  (let [pkg (-> opts
+                nc/nemesis-packages
+                (conj (membership-package opts))
+                (conj (scenario-package opts))
+                nc/compose-packages)]
+    ; Intersperse recovery and quiet periods into generator
+    (assoc pkg :generator
+           (gen/cycle-times
+             190 (:generator pkg)
+             10 (gen/cycle
+                  (gen/phases
+                    (gen/log "Recovering")
+                    (:final-generator pkg)
+                    (gen/sleep 10)))
+             300 (gen/cycle
+                  (gen/phases
+                    (gen/log "Waiting for recovery")
+                    (gen/sleep 300)
+                    ))))))
