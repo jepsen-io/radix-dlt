@@ -303,8 +303,8 @@
                     (gen/log "Recovering")
                     (:final-generator pkg)
                     (gen/sleep 10)))
-             300 (gen/cycle
-                  (gen/phases
-                    (gen/log "Waiting for recovery")
-                    (gen/sleep 300)
-                    ))))))
+             500 (gen/cycle
+                   (gen/phases
+                     (gen/log "Waiting for recovery")
+                     (gen/sleep 500)
+                     ))))))
