@@ -40,6 +40,7 @@
                                 ECPublicKey)
            (com.radixdlt.identifiers AID
                                      AccountAddressing
+                                     NodeAddressing
                                      REAddr)
            (com.radixdlt.utils Ints
                                UInt256)
@@ -158,6 +159,10 @@
     {:type    :radix-dlt/failure
      :message (.message x)
      :code    (.code x)})
+
+  NavigationCursor
+  (->clj [x]
+    {:value (.value x)})
 
   NetworkId
   (->clj [x]
@@ -367,17 +372,34 @@
 
   String
   (->validator-address [s]
-    (if (re-find #"^[0-9a-f]+$" s)
-      ; This is a raw hex address. Try converting it to an ECPublicKey, then to
-      ; a ValidatorAddress.
-      (-> s ->public-key ->validator-address)
+    (cond ; Wrapped in {}; strip off and reparse
+          (re-find #"^\{.+\}$" s)
+          (->validator-address (subs s 1 (dec (.length s))))
 
-      ; Might be a prefixed vb... identifier? God why are there SO many ways to
-      ; refer to the same thing in this system
-      (-> (com.radixdlt.networks.Addressing/ofNetworkId @current-network-id)
-          .forValidators
-          (.parse s)
-          ->validator-address)))
+          (re-find #"^[0-9a-f]+$" s)
+          ; This is a raw hex address. Try converting it to an ECPublicKey,
+          ; then to a ValidatorAddress.
+          (-> s ->public-key ->validator-address)
+
+          ; Might be a prefixed vb... identifier? God why are there SO many
+          ; ways to refer to the same thing in this system
+          (re-find #"^dv" s)
+          (-> (com.radixdlt.networks.Addressing/ofNetworkId @current-network-id)
+              .forValidators
+              (.parse s)
+              ->validator-address)
+
+          ; Or we might have a node address (which is what the genesis
+          ; generator calls pubkey), which I think might be interchangeable
+          ; with a validator address?????
+          (re-find #"^dn" s)
+          (-> (NodeAddressing/parseUnknownHrp s)
+              .getSecond
+              ->validator-address)
+
+          :else
+          (throw+ {:type   :unknown-string-validator-address
+                   :string s})))
 
   ValidatorAddress
   (->validator-address [x] x))
@@ -644,7 +666,7 @@
   ([chunk results cursor]
    ; Without a cursor, we're at the end of the sequence. Right? Right? Argh why
    ; are there two different ways of paginating :-O
-   (when cursor
+   (when (and cursor (-> cursor ->clj :value (not= "")))
      (lazy-seq
        (let [c (-> cursor Optional/of chunk ->clj)]
          (concat (results c)

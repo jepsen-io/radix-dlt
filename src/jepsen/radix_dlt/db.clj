@@ -11,7 +11,7 @@
                     [core :as jepsen :refer [primary]]
                     [db :as db]
                     [fs-cache :as cache]
-                    [util :as util :refer [parse-long pprint-str]]]
+                    [util :as util :refer [map-vals parse-long pprint-str]]]
             [jepsen.control [net :as cn]
                             [util :as cu]]
             [jepsen.radix-dlt.client :as rc]
@@ -529,19 +529,26 @@ export RADIXDLT_VALIDATOR_2_PRIVKEY=UCZRvnk5Jm9hEbpiingYsx7tbjf3ASNLHDf3BLmFaps=
   vb1qwyxnktxunxsvav0ac769m52tagzwy66kckzu8eftl0mew4pnpfj7zzrdty) and converts
   it to a node name like \"n1\"."
   [test validator-address]
-  (let [validators (-> test :db :universe deref :validators)]
-    (->> validators
-         (keep (fn [[index v]]
-                 (when (-> (:privkey v)
-                           rc/private-key-str->key-pair
-                           rc/->validator-address
-                           str
-                           (= validator-address))
-                   (nth (:nodes test) index))))
-         first
-         (assert+ {:type       :no-such-validator
-                   :address    validator-address
-                   :validators validators}))))
+  (let [validators (-> test :db :universe deref :validators)
+        target     (rc/->validator-address validator-address)
+        node (->> validators
+                  (keep (fn [[index v]]
+                          ;(info :pubkey (:pubkey v)
+                          ;      (str (rc/->validator-address (:pubkey v))))
+                          (when (-> (:pubkey v)
+                                    rc/->validator-address
+                                    (= target))
+                            (nth (:nodes test) index))))
+                  first)]
+    (assert+
+      node
+      {:type       :no-such-validator
+       :address    validator-address
+       :address'   (rc/->validator-address validator-address)
+       :validators (map-vals (fn [v]
+                               (assoc v :pubkey'
+                                      (rc/->validator-address (:pubkey v))))
+                             validators)})))
 
 (defrecord DB [; An atom wrapping the current Universe structure
                universe]

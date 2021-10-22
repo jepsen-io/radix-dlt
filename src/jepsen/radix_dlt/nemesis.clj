@@ -82,13 +82,50 @@
   [{:keys [nodes free]}]
   (remove free nodes))
 
+(defn removable-node?
+  "Can we remove this node from the given membership without taking it below
+  the minimum stake?"
+  [{:keys [view nodes free] :as membership} node]
+  ;(info (pprint-str view))
+  (letr [total-stake (total-stake view)
+         _ (when (zero? total-stake)
+             (return nil))
+         ; How much stake are on active nodes?
+         active-nodes (set (active-nodes membership))
+         ;_ (info :active-nodes active-nodes)
+         active-stake (->> (:validators view)
+                           (filter (comp active-nodes :node))
+                           (map :total-delegated-stake)
+                           (reduce +))
+         ; How much stake is on this node?
+         node-stake (->> (:validators view)
+                         (filter (comp #{node} :node))
+                         first
+                         :total-delegated-stake)
+         _ (when (nil? node-stake)
+             ; We don't know how much stake this node has; assume it's
+             ; removable.
+             ; (info "Node" node "has no stake in our validator view" (pprint-str (:validators view)) "so we're assuming it's removable.")
+             (return true))
+         ; How much stake would we have if we removed this node?
+         projected-stake (- active-stake node-stake)
+         ; Would that be a supermajority?
+         projected-stake-frac (/ projected-stake total-stake)]
+    ;(info "Node" node "has stake" node-stake (float (/ node-stake total-stake))
+    ;      "with active stake" active-stake (float (/ active-stake total-stake))
+    ;      "out of total stake" total-stake)
+    (< supermajority projected-stake-frac)))
+
 (defn remove-node-op
   "Takes a Membership state and returns an op (if possible) for removing a node
   from the cluster."
   [{:keys [view free] :as membership}]
   ; Pick a random node not in the free state
-  (when-let [node (rand-nth-empty (active-nodes membership))]
-    {:type :info, :f :remove-node, :value node}))
+  (let [removable (->> (active-nodes membership)
+                       (filter (partial removable-node? membership)))]
+    (info "Removable nodes:" (sort removable) "(of active " (sort (active-nodes membership)) ")")
+    (when (seq removable)
+      {:type :info, :f :remove-node, :value (rand-nth removable)})))
 
 (defn add-node-op
   "Takes a Membership state and returns an op (if possible) for
@@ -132,13 +169,16 @@
     ;(info :view node (pprint-str (rc/validators (clients node))))
     (try+
       (let [validators (rc/validators (clients node))]
-        ; Add node names to each validator
+        ; Add node names to each validator, when possible
         {:validators (->> validators
                           (mapv (fn [validator]
                                   (assoc validator :node
-                                         (rdb/validator-address->node
-                                           test
-                                           (:address validator))))))
+                                         (try+
+                                           (rdb/validator-address->node
+                                             test
+                                             (:address validator))
+                                           (catch [:type :no-such-validator] e
+                                             nil))))))
          ;:validation-info (rdb/validation-node-info node)
          })
       (catch [:type :radix-dlt/failure, :code 1604] e) ; Parse error
@@ -153,11 +193,11 @@
                               {}
                               node-views)
      ; And for the validators, we combine all views and pick any value for each
-     ; distinct node. No way to get a causal timestamp here, far as I know:
-     ; we're just gonna be wrong sometimes.
+     ; distinct validator key. No way to get a causal timestamp here, far as I
+     ; know: we're just gonna be wrong sometimes.
      :validators (->> (vals node-views)
                       (mapcat :validators)
-                      (group-by :node)
+                      (group-by :address)
                       vals
                       (mapv first))})
 
@@ -168,7 +208,7 @@
       :remove-node})
 
   (op [this test]
-    (->> [(stake-op this)
+    (->> [;(stake-op this)
           (add-node-op this)
           (remove-node-op this)
           :pending]
@@ -302,9 +342,9 @@
                   (gen/phases
                     (gen/log "Recovering")
                     (:final-generator pkg)
-                    (gen/sleep 10)))
+                    (repeat 10 (gen/sleep 1))))
              500 (gen/cycle
                    (gen/phases
                      (gen/log "Waiting for recovery")
-                     (gen/sleep 500)
+                     (repeat 500 (gen/sleep 1))
                      ))))))
