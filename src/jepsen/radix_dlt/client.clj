@@ -24,6 +24,7 @@
                                         Balance
                                         BuiltTransaction
                                         FinalizedTransaction
+                                        LocalValidatorInfo
                                         NetworkId
                                         TokenBalances
                                         TokenInfo
@@ -59,6 +60,22 @@
   "The ID for local testing networks."
   99)
 
+(defn xrd->attos
+  "Converts XRD to the 10^-18 representation used in the API. Rounds fractions
+  down to bigints."
+  [xrd]
+  (bigint (* 1000000000000000000N xrd)))
+
+(defn attos->xrd
+  [attos]
+  (/ attos 1000000000000000000N))
+
+(def validator-fund-amount
+  "How much do we give validator wallets so they can join the cluster? They
+  recommend 30, but I frequently see 'Not enough balance to for fee burn' with
+  just 30..."
+  (xrd->attos 50))
+
 (def current-network-id
   "We need this network ID to deserialize responses. We fill it in upon first
   connection to any network--this prevents us from testing multiple networks in
@@ -81,6 +98,11 @@
   :validator  (->clj (.getValidator a))
   :amount     (->clj (.getAmount a))
   :rri        (->clj (.getRri a)))
+
+(def-derived-map LocalValidatorInfoMap [^LocalValidatorInfo l]
+  :address    (->clj (.getAddress l))
+  :name       (.getName l)
+  :url        (.getUrl l))
 
 (def-derived-map TokenInfoMap [^TokenInfo t]
   :name            (.getName t)
@@ -159,6 +181,9 @@
     {:type    :radix-dlt/failure
      :message (.message x)
      :code    (.code x)})
+
+  LocalValidatorInfo
+  (->clj [x] (->LocalValidatorInfoMap x))
 
   NavigationCursor
   (->clj [x]
@@ -547,7 +572,7 @@
                    (let [status (txn-status client txid)]
                      (when (= :pending (:status status))
                        (throw+ {:type ::txn-pending
-                                :txid txid}))
+                                :txid (->clj txid)}))
                      status))
                  {:retry-interval 10
                   :log-interval   60000
@@ -713,6 +738,11 @@
   "How many validators do we fetch at a time, by default?"
   32)
 
+(defn local-validator-info
+  "Fetches information about the local validator"
+  [^RadixApi client]
+  (->clj (.. client local validatorInfo)))
+
 (defn validators
   "Takes a Radix Client and returns a lazy seq of validator states."
   [^RadixApi client]
@@ -762,41 +792,6 @@
          :log-message    "Waiting for transactions to start working"})))
   (info "Consensus ready!"))
 
-;; JSONRPC methods not supported by the normal client
-
-(defn dev-rpc!
-  "Makes a call to the /developer JSONRPC endpoint. Takes a node, a method name
-  (e.g. :index.get_transactions) and a parameter map."
-  [node method params]
-  (let [res (http/post (str "https://" node "/developer")
-                       {:form-params {:jsonrpc "2.0"
-                                      :id      1
-                                      :method (name method)
-                                      :params params}
-                        ; TODO: move this somewhere shared with jepsen.db
-                        :basic-auth   ["admin" "jepsenpw"]
-                        :insecure?    true
-                        :content-type :json
-                        :as           :json})]
-    (when-let [e (:error (:body res))]
-      (throw+ (assoc e :type :radix-dlt/error)))
-    (:result (:body res))))
-
-(defn raw-transactions
-  "Lists the set of raw transactions directly from the index."
-  [node]
-  (dev-rpc! node :index.get_transactions {:offset 1 :limit Integer/MAX_VALUE}))
-
-(defn raw-balances
-  "Lists the balances of every account."
-  [node]
-  (dev-rpc! node :developer.query_resource_state
-            {:prefix "06" ; TOKENS_IN_ACCOUNT
-             :groupBy "owner"
-             :query {:type "resource"
-                     :value "01" ; XRD
-                     }}))
-
 (defmacro with-errors
   "Takes an operation and a body. Evaluates body, converting known exceptions to fail/info operations."
   [op & body]
@@ -840,3 +835,100 @@
            (assoc ~op :type :fail, :error :not-found))
          (catch [:status 500] e#
            (assoc ~op :type :info, :error [:http-500 (:body e#)]))))
+
+
+
+;; JSONRPC methods not supported by the normal client
+
+(defn dev-rpc!
+  "Makes a call to a JSONRPC endpoint. Takes a node, an api group (e.g.
+  :developer, :account), a method name (e.g. :index.get_transactions) and a
+  parameter map."
+  [node api method params]
+  (let [res (http/post (str "https://" node "/" (name api))
+                       {:form-params {:jsonrpc "2.0"
+                                      :id      1
+                                      :method (name method)
+                                      :params params}
+                        ; TODO: move this somewhere shared with jepsen.db
+                        :basic-auth   (case api
+                                        :account ["superadmin" "jepsenpw"]
+                                        ["admin" "jepsenpw"])
+                        :insecure?    true
+                        :content-type :json
+                        :as           :json})]
+    (when-let [e (:error (:body res))]
+      (throw+ (assoc e :type :radix-dlt/error)))
+    (:result (:body res))))
+
+(defn raw-transactions
+  "Lists the set of raw transactions directly from the index."
+  [node]
+  (dev-rpc! node :developer :index.get_transactions
+            {:offset 1 :limit Integer/MAX_VALUE}))
+
+(defn raw-balances
+  "Lists the balances of every account."
+  [node]
+  (dev-rpc! node :developer :developer.query_resource_state
+            {:prefix "06" ; TOKENS_IN_ACCOUNT
+             :groupBy "owner"
+             :query {:type "resource"
+                     :value "01" ; XRD
+                     }}))
+
+(defn node-wallet-address
+  "Returns the wallet address of the local node--used for registering as a
+  validator."
+  [node]
+  (-> (dev-rpc! node :account :account.get_info []) :address))
+
+(defn node-validator-info
+  "Returns information about the node's validator state."
+  [node]
+  (-> (dev-rpc! node :validation :validation.get_node_info [])))
+
+(defn node-validator-address
+  "Returns the validator address of the local node--used for registering as a
+  validator."
+  [node]
+  (:address (node-validator-info node)))
+
+(defn register-validator!
+  "Registers a node as a validator in a one-shot transaction."
+  [node]
+  (let [validator-address   (node-validator-address node)
+        node-wallet-address (node-wallet-address node)]
+    (-> (dev-rpc! node :account :account.submit_transaction_single_step
+                  {:actions
+                   [{:type       :RegisterValidator
+                     :validator  validator-address}
+                    {:type         :UpdateValidatorFee
+                     :validator    validator-address
+                     :validatorFee 1}
+                    {:type         :UpdateValidatorMetadata
+                     :validator    validator-address
+                     :name         node
+                     :url          (str "http://" node)}
+                    {:type             :UpdateAllowDelegationFlag
+                     :validator        validator-address
+                     :allowDelegation  true}
+                    {:type         :UpdateValidatorOwnerAddress
+                     :validator    validator-address
+                     :owner        node-wallet-address}]}))))
+
+(defn fund-and-register-validator!
+  "Takes a client and a node. Uses the client (connected to any node) to fund
+  that node's wallet with enough XRD to register as a validator, then has the
+  node register itself."
+  [client node]
+  (let [funder (key-pair u/validator-funder)
+        wallet (node-wallet-address node)
+        rri    (:rri (native-token client))
+        txn'   (txn! client funder (str "fund validator " node)
+                     [[:transfer funder wallet validator-fund-amount rri]])]
+    ; Wait for the funds to go through
+    (-> txn' :status deref :status (= :confirmed)
+        (assert+ {:type :validator-funding-failed
+                  :txn' txn'}))
+    (register-validator! node)))

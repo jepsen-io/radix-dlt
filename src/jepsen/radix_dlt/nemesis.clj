@@ -1,6 +1,7 @@
 (ns jepsen.radix-dlt.nemesis
   "Fault injection for Radix clusters"
-  (:require [clojure.tools.logging :refer [info warn]]
+  (:require [clojure [set :as set]]
+            [clojure.tools.logging :refer [info warn]]
             [dom-top.core :as dt :refer [letr]]
             [jepsen [control :as c]
                     [db :as db]
@@ -10,17 +11,18 @@
             [jepsen.nemesis [combined :as nc]
                             [membership :as membership]]
             [jepsen.radix-dlt [client :as rc]
-                              [db :as rdb]]
+                              [db :as rdb]
+                              [util :as u]]
             [slingshot.slingshot :refer [try+ throw+]]))
-
-
-(def staker
-  "Which account do we use to restake funds?"
-  2)
 
 (def supermajority
   "How much stake do you need to dominate consensus?"
   2/3)
+
+(defn active-nodes
+  "Returns all nodes which are currently participating in the cluster."
+  [{:keys [nodes free]}]
+  (remove free nodes))
 
 (defn total-stake
   "What's the total stake in this view of the cluster?"
@@ -41,7 +43,7 @@
          first
          :node)))
 
-(defn stake-op
+(defn stake-supermajority-op
   "Takes a Membership state and returns an op which restakes a supermajority of
   the stake onto a single node, or nil if no such op is needed."
   [{:keys [view pending] :as membership}]
@@ -77,10 +79,27 @@
     {:type :info, :f :stake, :value {:validator (:address heavyweight)
                                      :amount x}}))
 
-(defn active-nodes
-  "Returns all nodes which are currently participating in the cluster."
-  [{:keys [nodes free]}]
-  (remove free nodes))
+(defn basic-stake-op
+  "Takes a Membership state and returns an op which tries to stake a node which
+  doesn't have any yet so that it has roughly 1/<node-count> of the extant
+  stake."
+  [{:keys [view pending] :as membership}]
+  ; Look at the distribution of stake
+  (letr [total-stake  (total-stake view)
+         lightweight  (->> (:validators view)
+                           (sort-by (juxt :total-delegated-stake
+                                          :address))
+                           first)
+         ; If there's no validators at all, we can't stake anyone.
+         _ (when-not lightweight
+             (return nil))
+         ; If their stake is nonzero, leave it alone
+         _ (when (pos? (:total-delegated-stake lightweight))
+             (return nil))
+         ; Great, they're at zero. Let's boost them!
+         stake (bigint (/ total-stake (count (active-nodes membership))))]
+    {:type :info, :f :stake, :value {:validator (:address lightweight)
+                                     :amount    stake}}))
 
 (defn removable-node?
   "Can we remove this node from the given membership without taking it below
@@ -123,7 +142,7 @@
   ; Pick a random node not in the free state
   (let [removable (->> (active-nodes membership)
                        (filter (partial removable-node? membership)))]
-    (info "Removable nodes:" (sort removable) "(of active " (sort (active-nodes membership)) ")")
+    ;(info "Removable nodes:" (sort removable) "(of active " (sort (active-nodes membership)) ")")
     (when (seq removable)
       {:type :info, :f :remove-node, :value (rand-nth removable)})))
 
@@ -135,6 +154,19 @@
     {:type  :info
      :f     :add-node,
      :value node}))
+
+(defn register-op
+  "Takes a Membership state and returns an op for promoting a node to a
+  Validator, if possible."
+  [{:keys [view free] :as membership}]
+  ; Find an active node *without* an entry in the validator state.
+  (let [active     (-> membership active-nodes set)
+        validators (->> view :validators (keep :node) set)
+        candidates (vec (set/difference active validators))]
+    (when-let [node (rand-nth-empty candidates)]
+      {:type  :info
+       :f     :register
+       :value node})))
 
 (defn unregister-node-op
   "Takes a membership state and returns an operation for unregistering a node
@@ -168,9 +200,10 @@
     ;(info :fetching-view-for node)
     ;(info :view node (pprint-str (rc/validators (clients node))))
     (try+
-      (let [validators (rc/validators (clients node))]
+      (let [validators      (future (rc/validators (clients node)))
+            validator-info  (future (rc/node-validator-info node))]
         ; Add node names to each validator, when possible
-        {:validators (->> validators
+        {:validators (->> @validators
                           (mapv (fn [validator]
                                   (assoc validator :node
                                          (try+
@@ -179,8 +212,7 @@
                                              (:address validator))
                                            (catch [:type :no-such-validator] e
                                              nil))))))
-         ;:validation-info (rdb/validation-node-info node)
-         })
+         :validator-info @validator-info})
       (catch [:type :radix-dlt/failure, :code 1604] e) ; Parse error
       (catch [:type :radix-dlt/failure, :code 1004] e) ; Conn refused
       ))
@@ -188,10 +220,10 @@
   (merge-views [this test]
     ; We take each node's own view of its validation node info, and make a map
     ; of nodes to those structures.
-    {:validation-info (reduce (fn [vi [node view]]
-                                (assoc vi node (:validation-info view)))
-                              {}
-                              node-views)
+    {:validator-info (reduce (fn [vi [node view]]
+                               (assoc vi node (:validator-info view)))
+                             {}
+                             node-views)
      ; And for the validators, we combine all views and pick any value for each
      ; distinct validator key. No way to get a causal timestamp here, far as I
      ; know: we're just gonna be wrong sometimes.
@@ -205,12 +237,15 @@
     #{:stake
       :unstake
       :add-node
-      :remove-node})
+      :remove-node
+      :register})
 
   (op [this test]
     (->> [;(stake-op this)
+          (basic-stake-op this)
           (add-node-op this)
           (remove-node-op this)
+          (register-op this)
           :pending]
          (remove nil?)
          vec
@@ -219,7 +254,7 @@
   (invoke! [this test {:keys [f value] :as op}]
     (case f
       :stake
-      (let [key-pair (rc/key-pair staker)
+      (let [key-pair (rc/key-pair u/staker)
             client   (-> test :nodes rand-nth clients)
             txn'     (-> client
                          (rc/txn! key-pair
@@ -241,7 +276,19 @@
       ; wiping the node.
       :remove-node
       (do (rdb/remove-node! test value)
-          (assoc op :value [:removed value]))))
+          (assoc op :value [:removed value]))
+
+      :register
+      (let [client (-> test :nodes rand-nth clients)]
+        (try+
+          (rc/fund-and-register-validator! client value)
+          (assoc op :value [:registered value])
+          (catch [:type :radix-dlt/error, :code -2011] _
+            (assoc op :value [:not-enough-funds value]))
+          (catch [:status 404] _
+            (assoc op :value [:not-ready value]))
+          (catch [:type :timeout] _
+            (assoc op :value [:timeout value]))))))
 
   (resolve [this test]
     this)
@@ -270,6 +317,26 @@
       :stake
       this
 
+      ; Registers are resolved once the node's validator info confirms it.
+      :register
+      (let [[outcome node] (:value op')]
+        (case outcome
+          ; Unclear if this would actually work; we'll clear these right away
+          (:not-enough-funds :not-ready :timeout)
+          this
+
+          ; It at least *thinks* it's started the registration process, but
+          ; we'll wait for that to be reflected in the validator info.
+          :registered
+          (let [validator      (get-in view [:validator-info node])
+                epoch          (:epochInfo validator)
+                ; Is this validator registered or *will* it be registered?
+                registered?    (or (get-in epoch [:current :registered])
+                                   (get-in epoch [:updates :registered]))]
+            (info "resolving registration of" (:value op) "with validator-info"
+                  validator (if registered? "registered" "unregistered"))
+            (when registered?
+              this))))
       nil))
 
   (teardown! [this test]
@@ -342,9 +409,9 @@
                   (gen/phases
                     (gen/log "Recovering")
                     (:final-generator pkg)
-                    (repeat 10 (gen/sleep 1))))
-             500 (gen/cycle
+                    (gen/sleep 10)))
+             100 (gen/cycle
                    (gen/phases
                      (gen/log "Waiting for recovery")
-                     (repeat 500 (gen/sleep 1))
+                     (repeat 10 (gen/sleep 10))
                      ))))))

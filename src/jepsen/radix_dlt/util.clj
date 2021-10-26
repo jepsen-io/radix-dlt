@@ -28,6 +28,14 @@
   balance. We use this to filter out balance reads of these spurious accounts."
   (disj (set default-account-ids) 1))
 
+(def staker
+  "Which account do we use to stake validators?"
+  2)
+
+(def validator-funder
+  "Which account do we use to fund validators?"
+  3)
+
 (defn fee-scale
   "Roughly how large are fees?"
   [test]

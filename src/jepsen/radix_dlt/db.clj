@@ -295,11 +295,14 @@ export RADIXDLT_VALIDATOR_2_PRIVKEY=UCZRvnk5Jm9hEbpiingYsx7tbjf3ASNLHDf3BLmFaps=
            :db.location                data-dir
            :api.account.enable         true
            :api.archive.enable         true
+           :api.construction.enable    true
            :api.developer.enable       true
            :api.developer.transaction_index.enable true
            :api.health.enable          true
+           :api.metrics.enable         true
            :api.system.enable          true
-           :api.construction.enable    true
+           :api.validation.enable      true
+           :api.version.enable         true
            :log.level                  "debug"
 
            ; Timeout tuning. Our goal is to reduce the time it takes for
@@ -426,7 +429,9 @@ export RADIXDLT_VALIDATOR_2_PRIVKEY=UCZRvnk5Jm9hEbpiingYsx7tbjf3ASNLHDf3BLmFaps=
     (c/exec :openssl :dhparam :-out "/etc/nginx/secrets/dhparam.pem" 1024)
     ; securrrrre
     (c/exec :htpasswd :-bc "/etc/nginx/secrets/htpasswd.admin"
-            "admin" password)))
+            "admin" password)
+    (c/exec :htpasswd :-bc "/etc/nginx/secrets/htpasswd.superadmin"
+            "superadmin" password)))
 
 (defn configure!
   "Configures Radix and nginx. Takes a universe."
