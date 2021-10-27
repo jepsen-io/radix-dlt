@@ -20,9 +20,36 @@
   2/3)
 
 (defn active-nodes
-  "Returns all nodes which are currently participating in the cluster."
+  "Given a membership, returns the set of all nodes which are currently
+  participating in the cluster."
   [{:keys [nodes free]}]
-  (remove free nodes))
+  (->> nodes
+       (remove free)
+       (into (sorted-set))))
+
+(defn registered*-nodes
+  "Given a membership, returns the set of all nodes which believe they're
+  currently registered or *will* be registered."
+  [membership]
+  (let [active (active-nodes membership)]
+    (->> membership :view :validator-info
+         (keep (fn [[node vi]]
+                 (when (and (active node)
+                            (or (get-in vi [:epochInfo :current :registered])
+                                (get-in vi [:epochInfo :updates :registered])))
+                   node)))
+         (into (sorted-set)))))
+
+(defn node->validator-address
+  "Given a membership view and a node, returns the validator address of that
+  node."
+  [membership node]
+  (-> membership
+      :view
+      :validator-info
+      (get node)
+      :address
+      rc/->validator-address))
 
 (defn total-stake
   "What's the total stake in this view of the cluster?"
@@ -103,10 +130,14 @@
 
 (defn removable-node?
   "Can we remove this node from the given membership without taking it below
-  the minimum stake?"
+  the minimum stake? Removable nodes must also be unregistered."
   [{:keys [view nodes free] :as membership} node]
   ;(info (pprint-str view))
-  (letr [total-stake (total-stake view)
+  (letr [_ (when (contains? (registered*-nodes membership) node)
+             ; If the node is registered, or *will* be registered, we won't
+             ; remove it.
+             (return false))
+         total-stake (total-stake view)
          _ (when (zero? total-stake)
              (return nil))
          ; How much stake are on active nodes?
@@ -168,12 +199,18 @@
        :f     :register
        :value node})))
 
-(defn unregister-node-op
+(defn unregister-op
   "Takes a membership state and returns an operation for unregistering a node
   as a validator."
-  [{:keys [validators view]}]
-  ; TODO
-  )
+  [{:keys [view] :as membership}]
+  ; (info :registered (registered*-nodes membership))
+  (let [registered* (registered*-nodes membership)]
+    ; Always maintain at *least* one node.
+    (when (< 1 (count registered*))
+      (let [node (rand-nth (vec registered*))]
+        {:type  :info
+         :f     :unregister
+         :value node}))))
 
 (defrecord Membership
   [clients    ; A map of nodes to RadixApi clients.
@@ -222,7 +259,7 @@
     ; of nodes to those structures.
     {:validator-info (reduce (fn [vi [node view]]
                                (assoc vi node (:validator-info view)))
-                             {}
+                             (sorted-map)
                              node-views)
      ; And for the validators, we combine all views and pick any value for each
      ; distinct validator key. No way to get a causal timestamp here, far as I
@@ -231,13 +268,15 @@
                       (mapcat :validators)
                       (group-by :address)
                       vals
-                      (mapv first))})
+                      (mapv first)
+                      (sort-by :node))})
 
   (fs [this]
     #{:stake
       :unstake
       :add-node
       :remove-node
+      :unregister
       :register})
 
   (op [this test]
@@ -246,6 +285,7 @@
           (add-node-op this)
           (remove-node-op this)
           (register-op this)
+          (unregister-op this)
           :pending]
          (remove nil?)
          vec
@@ -254,19 +294,22 @@
   (invoke! [this test {:keys [f value] :as op}]
     (case f
       :stake
-      (let [key-pair (rc/key-pair u/staker)
-            client   (-> test :nodes rand-nth clients)
-            txn'     (-> client
-                         (rc/txn! key-pair
-                                  "nemesis stake"
-                                  [[:stake
-                                    (rc/->account-address key-pair)
-                                    (:validator value)
-                                    (:amount value)]]))]
-        ; Await txn
-        (update op :value assoc
-                :txn-id (:id txn')
-                :status @(:status txn')))
+      (try+
+        (let [key-pair (rc/key-pair u/staker)
+              client   (-> test :nodes rand-nth clients)
+              txn'     (-> client
+                           (rc/txn! key-pair
+                                    "nemesis stake"
+                                    [[:stake
+                                      (rc/->account-address key-pair)
+                                      (:validator value)
+                                      (:amount value)]]))]
+          ; Await txn
+          (update op :value assoc
+                  :txn-id (:id txn')
+                  :status @(:status txn')))
+        (catch [:type :radix-dlt/failure, :code 1004] _
+          (assoc op :error :connection-refused)))
 
       :add-node
       (do (rdb/add-node! test value)
@@ -279,16 +322,31 @@
           (assoc op :value [:removed value]))
 
       :register
-      (let [client (-> test :nodes rand-nth clients)]
+      (let [client (-> (active-nodes this) vec rand-nth clients)]
         (try+
           (rc/fund-and-register-validator! client value)
           (assoc op :value [:registered value])
           (catch [:type :radix-dlt/error, :code -2011] _
             (assoc op :value [:not-enough-funds value]))
+          (catch [:type :radix-dlt/failure, :code 1004] _
+            (assoc op :value [:connection-refused value]))
           (catch [:status 404] _
             (assoc op :value [:not-ready value]))
           (catch [:type :timeout] _
-            (assoc op :value [:timeout value]))))))
+            (assoc op :value [:timeout value]))))
+
+      :unregister
+      (let [client (-> (active-nodes this) vec rand-nth clients)]
+        (try+ (rc/fund-and-unregister-validator! client value)
+              (assoc op :value [:unregistered value])
+              (catch [:type :radix-dlt/error, :code -2011] _
+                (assoc op :value [:not-enough-funds value]))
+              (catch [:type :radix-dlt/failure, :code 1004] _
+                (assoc op :value [:connection-refused value]))
+              (catch [:status 404] _
+                (assoc op :value [:not-ready value]))
+              (catch [:type :timeout] _
+                (assoc op :value [:timeout value]))))))
 
   (resolve [this test]
     this)
@@ -322,7 +380,7 @@
       (let [[outcome node] (:value op')]
         (case outcome
           ; Unclear if this would actually work; we'll clear these right away
-          (:not-enough-funds :not-ready :timeout)
+          (:not-enough-funds :connection-refused :not-ready :timeout)
           this
 
           ; It at least *thinks* it's started the registration process, but
@@ -333,10 +391,31 @@
                 ; Is this validator registered or *will* it be registered?
                 registered?    (or (get-in epoch [:current :registered])
                                    (get-in epoch [:updates :registered]))]
-            (info "resolving registration of" (:value op) "with validator-info"
-                  validator (if registered? "registered" "unregistered"))
+            ;(info "resolving registration of" (:value op) "with validator-info"
+            ;      validator (if registered? "registered" "unregistered"))
             (when registered?
               this))))
+
+      :unregister
+      (let [[outcome node] (:value op')]
+        (case outcome
+          ; Unclear if this would actually work; we'll clear these right away
+          (:not-enough-funds :connection-refused :not-ready :timeout)
+          this
+
+          ; It at least *thinks* it's started the unregistration process, but
+          ; we'll wait for that to be reflected in the validator info.
+          :unregistered
+          (let [validator      (get-in view [:validator-info node])
+                epoch          (:epochInfo validator)
+                ; Is this validator registered or *will* it be registered?
+                registered?    (or (get-in epoch [:current :registered])
+                                   (get-in epoch [:updates :registered]))]
+            ;(info "resolving registration of" (:value op) "with validator-info"
+            ;      validator (if registered? "registered" "unregistered"))
+            (when-not registered?
+              this))))
+
       nil))
 
   (teardown! [this test]

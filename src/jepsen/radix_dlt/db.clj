@@ -305,6 +305,11 @@ export RADIXDLT_VALIDATOR_2_PRIVKEY=UCZRvnk5Jm9hEbpiingYsx7tbjf3ASNLHDf3BLmFaps=
            :api.version.enable         true
            :log.level                  "debug"
 
+           ; Speed up epoch changes so we don't have to wait forever for
+           ; validators to register
+           :overwrite_forks.enable          true
+           :overwrite_forks.stokenet.views  1000
+
            ; Timeout tuning. Our goal is to reduce the time it takes for
            ; initial cluster convergence, and to speed recovery from faults.
            ; See radixdlt-core/radixdlt/src/main/resources/default.config for

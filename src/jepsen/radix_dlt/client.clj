@@ -917,10 +917,18 @@
                      :validator    validator-address
                      :owner        node-wallet-address}]}))))
 
-(defn fund-and-register-validator!
+(defn unregister-validator!
+  "Unregisters a node as a validator in a one-shot transaction."
+  [node]
+  (let [validator-address (node-validator-address node)]
+    (dev-rpc! node :account :account.submit_transaction_single_step
+              {:actions
+               [{:type      :UnregisterValidator
+                 :validator validator-address}]})))
+
+(defn fund-node-wallet!
   "Takes a client and a node. Uses the client (connected to any node) to fund
-  that node's wallet with enough XRD to register as a validator, then has the
-  node register itself."
+  that node's wallet with enough XRD to do a basic txn."
   [client node]
   (let [funder (key-pair u/validator-funder)
         wallet (node-wallet-address node)
@@ -930,5 +938,20 @@
     ; Wait for the funds to go through
     (-> txn' :status deref :status (= :confirmed)
         (assert+ {:type :validator-funding-failed
-                  :txn' txn'}))
-    (register-validator! node)))
+                  :txn' txn'}))))
+
+(defn fund-and-register-validator!
+  "Takes a client and a node. Uses the client (connected to any node) to fund
+  that node's wallet with enough XRD to register as a validator, then has the
+  node register itself."
+  [client node]
+  (fund-node-wallet! client node)
+  (register-validator! node))
+
+(defn fund-and-unregister-validator!
+  "Takes a client and a node. Uses the client (connected to any node) to fund
+  the node's wallet with enough XRD to unregister it as a validator, then has
+  the node unregister itself."
+  [client node]
+  (fund-node-wallet! client node)
+  (unregister-validator! node))
