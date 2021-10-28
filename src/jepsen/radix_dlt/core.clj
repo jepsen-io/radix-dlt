@@ -65,6 +65,7 @@
   "Takes a comma-separated string and returns a collection of keywords."
   [spec]
   (->> (str/split spec #",")
+       (remove #{""})
        (map keyword)))
 
 (defn parse-nemesis-spec
