@@ -4,14 +4,24 @@ Jepsen tests for the Radix distributed ledger system.
 
 ## Installation
 
-In addition to a Jepsen environment, you'll need a RadixDLT client.
+In addition to a Jepsen environment, you'll need a RadixDLT client. Which
+client depends on which version of Radix you're trying to test--see project.clj
+for several (commented-out) versions that might be appropriate. The most recent Radix build we're testing is:
+
+```
+feature/account-txn-log-write-read-consistency
+```
+
+And the client we're using with this build is:
 
 ```
 git clone https://github.com/radixdlt/radixdlt.git
-git checkout release/1.0-beta.40
+git checkout feature/client-support-for-txn-accounting
 ```
 
-Compile and install each part of the client library. This apparently only builds with JDK 11, so you'll need to downgrade, compile, then flip back.
+Compile and install each part of the client library. This apparently only
+builds with JDK 11, so depending on your Gradle setup you might need to
+downgrade, compile, then flip back.
 
 ```
 cd radixdlt-engine
@@ -45,6 +55,7 @@ If you need to build a custom build of Radix to test a patch:
 
 ```sh
 cd radix
+git checkout <SOME-VERSION>
 DOCKER_BUILDKIT=1 docker build --output type=local,dest=out --progress plain -f radixdlt-core/docker/Dockerfile.build .
 ```
 
