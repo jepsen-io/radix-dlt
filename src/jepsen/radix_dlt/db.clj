@@ -579,7 +579,7 @@ export RADIXDLT_VALIDATOR_2_PRIVKEY=UCZRvnk5Jm9hEbpiingYsx7tbjf3ASNLHDf3BLmFaps=
     (restart-nginx!)
 
     ; We might have spawned a JVM during the build process; kill it now.
-    (cu/grepkill! :kill "java")
+    (c/su (cu/grepkill! :kill "java"))
     (let [res (db/start! this test node)]
       (assert+ (= :started res) {:type :failed-to-start-daemon
                                  :node node
