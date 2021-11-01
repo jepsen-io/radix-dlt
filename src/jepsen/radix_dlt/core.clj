@@ -126,6 +126,7 @@
                                    :workload (:checker workload)
                                    :perf     (checker/perf
                                                {:nemeses (:perf nemesis)})
+                                   :clock    (checker/clock-plot)
                                    :ex       (checker/unhandled-exceptions)})
               :perf-opts        {:nemeses (:perf nemesis)}
               :generator        (gen/phases
