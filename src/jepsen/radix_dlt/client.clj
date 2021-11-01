@@ -158,12 +158,20 @@
   ActionType
   (->clj [x]
     (condp = x
-      ActionType/MSG      :msg
-      ActionType/TRANSFER :transfer
-      ActionType/STAKE    :stake
-      ActionType/UNSTAKE  :unstake
-      ActionType/UNKNOWN  :unknown
-                          x))
+      ActionType/MSG                       :msg
+      ActionType/TRANSFER                  :transfer
+      ActionType/STAKE                     :stake
+      ActionType/UNSTAKE                   :unstake
+      ActionType/MINT                      :mint
+      ActionType/BURN                      :burn
+      ActionType/REGISTER_VALIDATOR        :register-validator
+      ActionType/UNREGISTER_VALIDATOR      :unregister-validator
+      ActionType/UPDATE_VALIDATOR_METADATA :update-validator-metadata
+      ActionType/UPDATE_VALIDATOR_FEE      :update-validator-fee
+      ;ActionType/UPDATE_OWNER              :update-owner
+      ;ActionType/UPDATE_DELEGATION         :update-delegation
+      ActionType/UNKNOWN                   :unknown
+                                           x))
 
   AID
   (->clj [x]
