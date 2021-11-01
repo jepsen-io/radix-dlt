@@ -374,7 +374,7 @@
         ; Right, what thread is this?
         (let [t (->> op :process (gen/process->thread context))
               ; Pick an f based on the write/read concurrency of the test.
-              f (if (< t (:write-concurrency test))
+              f (if (or (empty? fs) (< t (:write-concurrency test)))
                     ; First few threads do writes
                     :txn
                     ; Remaining threads do reads
