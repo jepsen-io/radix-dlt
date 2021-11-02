@@ -55,11 +55,12 @@
   [{:nemesis nil}
    {:nemesis #{:kill}}
    {:nemesis #{:partition}}
-   {:nemesis #{:kill :partition}}
+   {:nemesis #{:clock}}
+   {:nemesis #{:kill :partition :clock}}
    {:nemesis #{:membership}}
    {:nemesis #{:membership :kill}}
    {:nemesis #{:membership :partition}}
-   {:nemesis #{:membership :kill :partition}}])
+   {:nemesis #{:membership :kill :partition :clock}}])
 
 (defn parse-comma-kws
   "Takes a comma-separated string and returns a collection of keywords."
