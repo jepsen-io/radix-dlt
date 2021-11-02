@@ -82,6 +82,27 @@ We don't have access to the raw txn APIs, so you'll need to run with
 
 `--fs txn-log,balance`
 
+## Passive Checks of Mainnet
+
+This test suite also includes a passive checker which will perform read-only
+queries against the Radix mainnet to identify two classes of consistency
+anomalies: transactions which are present in one account's log but missing from
+another, and transactions which are present in some log but in state `FAILED`.
+To do this, check out the `1.0.0-compatible` branch, and run `lein pubcheck`:
+
+```sh
+git checkout 1.0.0-compatible
+lein run pubcheck
+```
+
+This will take several hours. When it completes, run a second pass with
+
+```sh
+lein run pubcheck --recheck
+```
+
+... which will go back and find extra bugs. This checker isn't particularly
+smart--it was a quick one-off and wasn't built to last.
 
 ## License
 
