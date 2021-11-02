@@ -308,6 +308,8 @@
           (update op :value assoc
                   :txn-id (:id txn')
                   :status @(:status txn')))
+        (catch [:type :jepsen.radix-dlt.client/txn-pending] _
+          (assoc op :error :txn-pending))
         (catch [:type :radix-dlt/failure, :code 1004] _
           (assoc op :error :connection-refused)))
 
