@@ -158,8 +158,8 @@
     :parse-fn parse-comma-kws
     :validate [(partial every? db-targets) (cli/one-of db-targets)]]
 
-   [nil "--fs FUNCTION_TYPES" "A comma-separated list of functions to use when interacting with Radix. This allows you to e.g. only perform raw balance reads instead of archive balance reads. `txn-log` is strongly recommended; balance reads are essentially useless without them."
-    :default #{:balance :raw-balances :raw-txn-log :txn-log}
+   [nil "--fs FUNCTION_TYPES" "A comma-separated list of functions to use when interacting with Radix. This allows you to e.g. only perform raw balance reads instead of archive balance reads. `txn-log` is strongly recommended; balance reads are essentially useless without them. Pass an empty string to disable all reads. Add raw-txn-log and raw-balances to query the raw ledger state--this will only work in certain development builds."
+    :default #{:balance :txn-log}
     :parse-fn (comp set parse-comma-kws)
     :validate [(partial every? fs) (cli/one-of fs)]]
 
