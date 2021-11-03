@@ -48,7 +48,7 @@
                   ; we leave it out
                   :exclusions [org.bouncycastle/bcprov-jdk15to18]]
 
-                 [jepsen/jepsen "0.2.5-SNAPSHOT"
+                 [jepsen/jepsen "0.2.5"
                   :exclusions [com.fasterxml.jackson.core/jackson-core]]
 
                  [mvxcvi/clj-cbor "1.1.0"]
