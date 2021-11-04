@@ -116,6 +116,7 @@
 (defn install!
   "Installs a full Radix node."
   [test]
+  (debian/install [:openjdk-17-jdk-headless])
   (install-radix! test)
   (install-nginx! test))
 
