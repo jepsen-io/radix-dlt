@@ -116,7 +116,6 @@
 (defn install!
   "Installs a full Radix node."
   [test]
-  (c/su (debian/install [:openjdk-17-jdk-headless]))
   (install-radix! test)
   (install-nginx! test))
 
@@ -565,6 +564,8 @@ export RADIXDLT_VALIDATOR_2_PRIVKEY=UCZRvnk5Jm9hEbpiingYsx7tbjf3ASNLHDf3BLmFaps=
                universe]
   db/DB
   (setup! [this test node]
+    (c/su (debian/install [:openjdk-17-jdk-headless]))
+
     (when (= node (primary test))
       (assert (nil? @universe))
       (compare-and-set! universe nil (get-universe test))
