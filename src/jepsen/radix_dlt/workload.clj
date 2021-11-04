@@ -424,7 +424,7 @@
     :key-count            Number of distinct keys at any point. Defaults to
                           10 for exponential, 3 for uniform.
 
-    :max-writes-per-key   Maximum number of operations per key. Defaults to 32.
+    :max-writes-per-key   Maximum number of operations per key. Defaults to 64.
 
   The selection of account IDs is a little tricky.
 
