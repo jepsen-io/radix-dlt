@@ -14,7 +14,8 @@
                     [util :as util :refer [map-vals parse-long pprint-str]]]
             [jepsen.control [net :as cn]
                             [util :as cu]]
-            [jepsen.radix-dlt.client :as rc]
+            [jepsen.radix-dlt [client :as rc]
+                              [util :as u]]
             [jepsen.os.debian :as debian]
             [slingshot.slingshot :refer [try+ throw+]])
   (:import (java.util Base64)))
@@ -75,6 +76,11 @@
 (def radix-git-dir
   "Where do we clone the radixdlt git repo?"
   (str dir "/radixdlt"))
+
+(def stake
+  "How much stake do we give nodes that join during the initial DB setup
+  process?"
+  903079600000000000000N)
 
 (defn node-index
   "Takes a node in a test and returns its 0-indexed place in the nodes list. We
@@ -590,7 +596,24 @@ export RADIXDLT_VALIDATOR_2_PRIVKEY=UCZRvnk5Jm9hEbpiingYsx7tbjf3ASNLHDf3BLmFaps=
     ; Hack: even though the /node is ready, the client api might take
     ; longer, and we'll get weird parse errors when HTML shows up instead
     ; of JSON
-    (rc/await-initial-convergence test node))
+    (rc/await-initial-convergence test node)
+
+    (when-not (init-node? @universe node)
+      ; We need to register this node as a validator, and stake it.
+      (let [client (rc/open test node)
+            _ (info "Registering as validator")
+            _ (rc/fund-and-register-validator! client node)
+            _ (rc/await-delegation node)
+            _ (info "Staking")
+            key-pair (rc/key-pair u/staker)
+            txn' (rc/txn! client key-pair
+                          "initial stake"
+                          [[:stake key-pair (rc/node-validator-address node)
+                            stake]])
+            status @(:status txn')]
+        (assert+ (= :confirmed (:status status))
+                 {:type ::initial-stake-failed
+                  :status status}))))
 
   (teardown! [this test node]
     (db/kill! this test node)

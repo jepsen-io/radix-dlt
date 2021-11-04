@@ -963,3 +963,16 @@
   [client node]
   (fund-node-wallet! client node)
   (unregister-validator! node))
+
+(defn await-delegation
+  "Waits until this node has delegation enabled. Even though the register
+  transaction may have committed, it takes a few seconds for the node to
+  realize it's stake-able."
+  [node]
+  (util/await-fn (fn wait []
+                   (let [info (node-validator-info node)]
+                     (assert+ (:allowDelegation info)
+                              {:type :delegation-not-enabled
+                               :info info})))
+                 {:log-message (str "Waiting for " node " to allow delegation")
+                  :log-interval 10000}))
