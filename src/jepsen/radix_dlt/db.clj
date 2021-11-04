@@ -564,7 +564,7 @@ export RADIXDLT_VALIDATOR_2_PRIVKEY=UCZRvnk5Jm9hEbpiingYsx7tbjf3ASNLHDf3BLmFaps=
                universe]
   db/DB
   (setup! [this test node]
-    (c/su (debian/install [:openjdk-17-jdk-headless]))
+    (c/su (debian/install [:openjdk-11-jdk]))
 
     (when (= node (primary test))
       (assert (nil? @universe))
