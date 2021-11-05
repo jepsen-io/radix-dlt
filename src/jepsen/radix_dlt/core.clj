@@ -2,6 +2,7 @@
   "Top-level namespace: constructs tests and runs them at the CLI."
   (:require [clojure [string :as str]
                      [pprint :refer [pprint]]]
+            [clojure.java [io :as io]]
             [jepsen [checker :as checker]
                     [cli :as cli]
                     [db]
@@ -115,7 +116,7 @@
               :db               db
               :name             (str (name workload-name) " "
                                      (or (when (:stokenet opts) "stokenet")
-                                         (:zip opts)
+                                         (.getName (io/file (:zip opts)))
                                          (:version opts)) " "
                                      (pr-str (:nemesis opts)))
               :pure-generators  true
