@@ -494,9 +494,12 @@
                           (when-let [id (:id txn)]
                             (txn-diff test (get txn-txns id) txn)))
                         (remove nil?))]
-          {:valid?        (empty? errs)
-           :error-count   (count errs)
-           :errors        (sample 6 errs)})))))
+          {:valid?          (empty? errs)
+           :error-count     (count errs)
+           :error-txn-count (->> errs
+                                 (group-by (comp :id :expected))
+                                 count)
+           :errors          (sample 6 errs)})))))
 
 (defn balance-vis-checker
   "Renders balances, transaction logs, etc for each account"
