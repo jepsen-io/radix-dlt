@@ -194,6 +194,59 @@ $ lein repl
 (->> (pc/load-state) :errors pprint)
 ```
 
+## Project Structure
+
+`project.clj` defines how to run this test suite, including our JVM
+dependencies and entry point. Source code lives in `src/jepsen/radix-dlt/`.
+Results of each test are stored in `store/`.
+
+Key namespaces are:
+
+`core.clj`: Entry point for the CLI. Parses arguments, constructs test maps,
+and runs them.
+
+`client.clj`: Wrapper library around the Radix Java client API, and also
+utility methods which interact directly with some JSON-RPC APIs not exposed by
+the Java client. Coerces between Clojure and the Radix client's representations
+of datatypes. Coerces between various representations of account and validator
+addresses, etc. Some common error handling.
+
+`db.clj`: Installation, setup and teardown code for Radix. Also knows how to
+join nodes to, and remove nodes from, the cluster. Defines database-related
+fault injection
+
+`nemesis.clj`: Fault injection. Glues together standard Jepsen nemeses like partitions, process crashes, pauses, and clock skew, together with custom nemeses like membership changes.
+
+`workload.clj`: Generates operations for the main Radix test: transfer
+transactions, balance reads, txn-log reads, and their raw counterparts. Defines
+how to apply those operations to Radix nodes, and interprets their responses.
+
+`accounts.clj`: Helps manage the workload's mapping of short numeric accounts
+to private keys, etc.
+
+`double_spend.clj`: An alternate workload which tries to pay two different
+accounts from an account that can only pay one, and sees if both transactions
+succeed.
+
+`checker.clj`: Entry point for safety checkers and visualizations. Performs
+isolation level anomaly detection over both the archive API and raw txn log.
+Looks for negative balances. Checks to make sure that transactions are
+faithfully represented in txn logs. Computes high-level aggregate statistics.
+Renders per-account visualizations.
+
+`checker/util.clj`: Analyzes history structure and constructs intermediate data
+structures we use as a part of `checker.clj`.
+
+`balance_vis.clj`: Renders the four visualizations of each account, including
+balances over time, data and visual representations of the txn log(s), and
+timelines of all operations over accounts.
+
+`pubcheck.clj`: A standalone utility--not a full Jepsen test--which uses reads
+of the public Radix mainnet to try to identify consistency anomalies in
+production.
+
+`util.clj`: Common utility functions.
+
 ## License
 
 Copyright © 2021 Jepsen, LLC
